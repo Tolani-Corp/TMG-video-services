@@ -1,0 +1,50 @@
+{
+  "manifest": {
+    "schemaVersion": "1.0.0",
+    "assetId": "harmless_fixture_001",
+    "tenantId": "tmg_fixture",
+    "ingestRunId": "harmless_fixture_001_v1",
+    "source": {
+      "sourceClass": "fixture",
+      "authorityRef": "repo://Tolani-Corp/TMG-video-services/fixtures/harmless/harmless-fixture.mp4"
+    },
+    "media": {
+      "objectKey": "tenants/tmg_fixture/assets/harmless_fixture_001/media/original.mp4",
+      "sha256": "479a18838b9914e6994725f3b8dc7e15bc07ffe80ab3b1c1805e195d0251f1e3",
+      "bytes": 1441,
+      "mimeType": "video/mp4",
+      "durationMs": 1000
+    },
+    "rightsProfileId": "harmless_fixture_rights_v1",
+    "publicationState": "review",
+    "receivedAt": "2026-08-20T20:00:00.000Z"
+  },
+  "rights": {
+    "schemaVersion": "1.0.0",
+    "rightsProfileId": "harmless_fixture_rights_v1",
+    "assetId": "harmless_fixture_001",
+    "tenantId": "tmg_fixture",
+    "evidenceState": "verified",
+    "sourceEvidenceRef": "repo://Tolani-Corp/TMG-video-services/fixtures/harmless/control.json",
+    "allowedTerritories": [],
+    "allowedTenantIds": [
+      "tmg_fixture"
+    ],
+    "grants": {
+      "externalApi": false,
+      "mcp": false,
+      "advertising": false,
+      "datasetExport": false,
+      "licensing": false
+    },
+    "revision": 1,
+    "updatedAt": "2026-08-20T20:00:00.000Z"
+  },
+  "segments": [
+    {
+      "segmentId": "s000",
+      "startMs": 0,
+      "endMs": 1000
+    }
+  ]
+}

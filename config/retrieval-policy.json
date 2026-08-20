@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0.0",
+  "policyId": "tmg.video.retrieval_policy.2026-08-20.v1",
+  "defaultDecision": "deny",
+  "purposes": {
+    "internal_search": {
+      "requiresVerifiedRightsEvidence": true,
+      "requiresApprovedPublicationState": false,
+      "requiresExplicitPurposeGrant": false
+    },
+    "external_api": {
+      "requiresVerifiedRightsEvidence": true,
+      "requiresApprovedPublicationState": true,
+      "requiresExplicitPurposeGrant": true
+    },
+    "mcp": {
+      "requiresVerifiedRightsEvidence": true,
+      "requiresApprovedPublicationState": true,
+      "requiresExplicitPurposeGrant": true
+    },
+    "advertising": {
+      "requiresVerifiedRightsEvidence": true,
+      "requiresApprovedPublicationState": true,
+      "requiresExplicitPurposeGrant": true
+    },
+    "dataset_export": {
+      "requiresVerifiedRightsEvidence": true,
+      "requiresApprovedPublicationState": true,
+      "requiresExplicitPurposeGrant": true
+    },
+    "licensing": {
+      "requiresVerifiedRightsEvidence": true,
+      "requiresApprovedPublicationState": true,
+      "requiresExplicitPurposeGrant": true
+    }
+  },
+  "invariants": [
+    "Vectorization never expands source rights.",
+    "A derived embedding cannot authorize access to its source asset.",
+    "External retrieval requires both publication approval and a purpose-specific grant.",
+    "Tenant and territory constraints remain enforceable at retrieval time.",
+    "Rights evidence is canonical outside the vector index; vector metadata is only an enforcement projection."
+  ]
+}
