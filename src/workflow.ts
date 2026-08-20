@@ -14,6 +14,7 @@ import {
 import { prepareVectorUpsert } from "./indexing";
 import { verifyPhysicalMediaEvidence } from "./physical-evidence";
 import type { IndexReceipt } from "./revocation";
+import { requireVectorizeAsyncMutationId } from "./vector-mutation";
 
 interface IngestionWorkflowResult {
   status: "disabled" | "quarantined" | "indexed";
@@ -35,7 +36,7 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
     event: WorkflowEvent<unknown>,
     step: WorkflowStep,
   ): Promise<IngestionWorkflowResult> {
-    if (this.env.TMG_INGEST_WORKFLOW_ENABLED !== "true") {
+    if (String(this.env.TMG_INGEST_WORKFLOW_ENABLED) !== "true") {
       return { status: "disabled", reasons: ["g0_ingestion_workflow_disabled"] };
     }
 
@@ -123,7 +124,7 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
 
         const mutation = await this.env.VIDEO_INDEX.upsert(prepared);
         return {
-          mutationId: mutation.mutationId,
+          mutationId: requireVectorizeAsyncMutationId(mutation),
           vectorIds: prepared.map((vector) => vector.id),
           embeddingProfileId: provider.profile.id,
         };

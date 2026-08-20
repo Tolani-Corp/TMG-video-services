@@ -71,9 +71,11 @@ export default {
       }
 
       try {
+        const { territory, ...searchRequest } = parsed.data;
         const matches = await searchVideoMoments(env, {
-          ...parsed.data,
+          ...searchRequest,
           purpose: "external_api",
+          ...(territory ? { territory } : {}),
         });
         return json({ matches, requestId });
       } catch (error) {

@@ -13,6 +13,7 @@ import {
   revokeRightsRecord,
   type IndexReceipt,
 } from "./revocation";
+import { requireVectorizeAsyncMutationId } from "./vector-mutation";
 
 const requestSchema = z.object({
   tenantId: z.string().min(1).max(128),
@@ -129,7 +130,7 @@ export class RevocationWorkflow extends WorkflowEntrypoint<Env, unknown> {
           {
             deleteByIds: async (ids) => {
               const mutation = await this.env.VIDEO_INDEX.deleteByIds(ids);
-              return { mutationId: mutation.mutationId };
+              return { mutationId: requireVectorizeAsyncMutationId(mutation) };
             },
           },
           receipt,
