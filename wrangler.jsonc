@@ -8,7 +8,9 @@
   "vars": {
     "TMG_PUBLIC_API_ENABLED": "false",
     "TMG_MCP_ENABLED": "false",
-    "TMG_POLICY_VERSION": "2026-08-20.v1",
+    "TMG_INGEST_WORKFLOW_ENABLED": "false",
+    "TMG_INGESTION_MODE": "fixture_only",
+    "TMG_POLICY_VERSION": "2026-08-20.v2",
     "TMG_EMBEDDING_DIMENSIONS": "512"
   },
   "vectorize": [
@@ -21,6 +23,13 @@
     {
       "binding": "MEDIA_BUCKET",
       "bucket_name": "tmg-video-assets-dev"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "tmg-video-ingestion-dev",
+      "binding": "INGEST_WORKFLOW",
+      "class_name": "IngestionWorkflow"
     }
   ],
   "observability": {

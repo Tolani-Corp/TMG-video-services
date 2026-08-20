@@ -2,6 +2,8 @@ import { handleMcp } from "./mcp";
 import { vectorSearchBodySchema } from "./schemas";
 import { searchVideoMoments, VectorDimensionError } from "./vectorize";
 
+export { IngestionWorkflow } from "./workflow";
+
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
     status,
@@ -27,6 +29,8 @@ export default {
         publicStatusGate: "G0",
         publicApiEnabled: isEnabled(env.TMG_PUBLIC_API_ENABLED),
         mcpEnabled: isEnabled(env.TMG_MCP_ENABLED),
+        ingestWorkflowEnabled: isEnabled(env.TMG_INGEST_WORKFLOW_ENABLED),
+        ingestionMode: env.TMG_INGESTION_MODE,
         policyVersion: env.TMG_POLICY_VERSION,
         requestId,
       });

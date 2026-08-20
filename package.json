@@ -1,6 +1,6 @@
 {
   "name": "@tolani-corp/tmg-video-services",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Governed, rights-aware multimodal video intelligence infrastructure for the Tolani ecosystem.",
@@ -10,8 +10,9 @@
     "cf-typegen": "wrangler types",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "fixture:verify": "node scripts/verify-fixture.mjs",
     "marketing:check": "node scripts/marketing-check.mjs",
-    "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm marketing:check"
+    "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",

@@ -18,7 +18,12 @@ export const PUBLICATION_STATES = [
 
 export type PublicationState = (typeof PUBLICATION_STATES)[number];
 
-export type RightsEvidenceState = "verified" | "pending" | "rejected" | "expired";
+export type RightsEvidenceState =
+  | "verified"
+  | "pending"
+  | "rejected"
+  | "expired"
+  | "revoked";
 
 export interface PurposeGrants {
   externalApi: boolean;

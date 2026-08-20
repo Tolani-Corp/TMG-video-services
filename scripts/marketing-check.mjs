@@ -14,6 +14,8 @@ function readJson(path) {
 const context = readJson("config/public-product-context.json");
 const binding = readJson("config/ecosystem-policy-binding.json");
 const retrieval = readJson("config/retrieval-policy.json");
+const wrangler = readJson("wrangler.jsonc");
+const fixture = readJson("fixtures/harmless/control.json");
 
 for (const key of [
   "schemaVersion",
@@ -46,6 +48,12 @@ if (context.publicStatus === "G0") {
   if ((context.approvedClaims ?? []).length > 0) {
     failures.push("G0 repository must not contain approved public claims");
   }
+  for (const flag of ["TMG_PUBLIC_API_ENABLED", "TMG_MCP_ENABLED", "TMG_INGEST_WORKFLOW_ENABLED"]) {
+    if (wrangler.vars?.[flag] !== "false") failures.push(`G0 default ${flag} must remain false`);
+  }
+  if (wrangler.vars?.TMG_INGESTION_MODE !== "fixture_only") {
+    failures.push("G0 ingestion mode must remain fixture_only");
+  }
 }
 
 if (!context.primaryCTA?.owner || !context.primaryCTA?.downstreamState || !context.primaryCTA?.event) {
@@ -73,6 +81,19 @@ for (const purpose of ["external_api", "mcp", "advertising", "dataset_export", "
   if (!rule?.requiresVerifiedRightsEvidence || !rule?.requiresApprovedPublicationState || !rule?.requiresExplicitPurposeGrant) {
     failures.push(`${purpose}: external/commercial retrieval must require verified rights, approved publication, and explicit purpose grant`);
   }
+}
+
+if (fixture.manifest?.source?.sourceClass !== "fixture") {
+  failures.push("harmless fixture must remain sourceClass=fixture");
+}
+if (fixture.manifest?.publicationState !== "review") {
+  failures.push("harmless fixture must remain publicationState=review");
+}
+if (fixture.rights?.evidenceState !== "verified") {
+  failures.push("harmless fixture must retain explicit fixture evidence");
+}
+for (const [grant, value] of Object.entries(fixture.rights?.grants ?? {})) {
+  if (value !== false) failures.push(`harmless fixture grant ${grant} must remain false`);
 }
 
 if (failures.length > 0) {

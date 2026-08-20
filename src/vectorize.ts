@@ -16,7 +16,7 @@ const metadataSchema = z.object({
   embeddingProfileId: z.string(),
   embeddingDimensions: z.number().int().positive(),
   rightsProfileId: z.string(),
-  rightsEvidenceState: z.enum(["verified", "pending", "rejected", "expired"]),
+  rightsEvidenceState: z.enum(["verified", "pending", "rejected", "expired", "revoked"]),
   sourceEvidenceRef: z.string(),
   allowedTerritories: z.array(z.string()).default([]),
   allowedTenantIds: z.array(z.string()).default([]),

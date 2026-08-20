@@ -4,26 +4,38 @@ Governed, rights-aware multimodal video intelligence infrastructure for the Tola
 
 > **Current gate: G0 / internal prototype.** No public commercial API, MCP service, advertising product, dataset export, marketplace, or licensing capability is represented as live.
 
-## v1 implementation
+## v0.2 implementation
 
-- typed video-segment, embedding-lineage, and rights models;
+- typed video-segment, embedding-lineage, canonical asset-manifest, and rights-registry models;
 - deny-by-default retrieval policy evaluation;
 - separate grants for API, MCP, advertising, dataset export, and licensing;
 - Cloudflare Vectorize retrieval with tenant/rights/publication pre-filtering;
 - final rights checks for expiry and territory before matches are released;
+- deterministic fixture-only temporal embedding provider;
+- Cloudflare Workflow for durable fixture ingestion, disabled by default;
+- private R2 control records for manifests, rights revisions, quarantine events, and index receipts;
+- physical-evidence verification using R2 object size and SHA-256 evidence;
+- revocation model that disables grants and deletes vector IDs recorded in index receipts;
 - stateless MCP SDK v2 `search_video_moments`, disabled by default;
 - REST vector-search route, disabled by default;
-- R2 and Vectorize development bindings;
 - Tolani commercial-context policy binding and G0 integrity CI;
-- unit tests for policy and vector-filter behavior.
+- harmless synthetic MP4 fixture with committed SHA-256 and byte-count validation.
 
 ## Architecture
 
 ```text
-Authorized video
+Authorized / fixture video
      |
      v
-Provenance + canonical rights evidence
+Canonical asset manifest + rights revision
+     |
+     v
+Private R2 physical evidence
+     |
+     v
+Durable ingestion Workflow
+     |
+     +--> quarantine on missing/mismatched evidence
      |
      v
 Temporal segments + embedding lineage
@@ -31,7 +43,7 @@ Temporal segments + embedding lineage
      +--------------------+
      |                    |
      v                    v
-R2 artifacts         Vectorize index
+R2 control records   Vectorize index
                           |
                           v
                  rights-aware retrieval
@@ -42,7 +54,7 @@ R2 artifacts         Vectorize index
                 at G0             at G0
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/SECURITY_AND_RIGHTS.md`](docs/SECURITY_AND_RIGHTS.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SECURITY_AND_RIGHTS.md`](docs/SECURITY_AND_RIGHTS.md), and [`docs/INGESTION_PLANE.md`](docs/INGESTION_PLANE.md).
 
 ## Ecosystem governance
 
@@ -71,7 +83,7 @@ pnpm dev
 
 ## Development resource provisioning
 
-The Worker configuration names development resources but does not assert they are provisioned. Create them before exercising retrieval:
+The Worker configuration names development resources but does not assert they are provisioned. Create them before exercising retrieval or ingestion:
 
 ```bash
 npx wrangler@latest r2 bucket create tmg-video-assets-dev
@@ -81,29 +93,41 @@ npx wrangler@latest vectorize create tmg-video-segments-512-dev --dimensions=512
 Create metadata indexes **before inserting vectors**:
 
 ```bash
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=tenantId --type=string
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=rightsVerified --type=boolean
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=publicationState --type=string
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=externalApi --type=boolean
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=mcp --type=boolean
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=advertising --type=boolean
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=datasetExport --type=boolean
-npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --propertyName=licensing --type=boolean
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=tenantId --type=string
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=rightsVerified --type=boolean
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=publicationState --type=string
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=externalApi --type=boolean
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=mcp --type=boolean
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=advertising --type=boolean
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=datasetExport --type=boolean
+npx wrangler@latest vectorize create-metadata-index tmg-video-segments-512-dev --property-name=licensing --type=boolean
 ```
+
+## Harmless fixture acceptance
+
+The fixture lane exists only to prove ingestion mechanics without third-party media or commercialization authority.
+
+```bash
+pnpm fixture:verify
+
+pnpm wrangler r2 object put \
+  tmg-video-assets-dev/tenants/tmg_fixture/assets/harmless_fixture_001/media/original.mp4 \
+  --file fixtures/harmless/harmless-fixture.mp4 \
+  --content-type video/mp4 \
+  --remote
+```
+
+Then follow `docs/INGESTION_PLANE.md` to enable the development Workflow temporarily, trigger it with `fixtures/harmless/control.json`, inspect the R2 receipt/Vectorize records, and disable ingestion again. Public REST and MCP flags remain independent and must stay false at G0.
 
 ## Safe activation sequence
 
-Do not flip either enablement flag merely to test production connectivity. Promotion order is:
-
-1. pass tests and policy integrity;
-2. register the repository in the canonical Tolani portfolio registry;
-3. implement canonical asset/rights persistence plus revocation propagation;
-4. add authenticated ingestion and embedding-provider adapters;
-5. add API/MCP authentication, tenant authorization, quotas, and abuse controls;
-6. provision isolated staging resources and harmless fixtures;
-7. run staging retrieval, isolation, expiry, and revocation tests;
-8. obtain ecosystem gate promotion and release evidence;
-9. enable only the approved surface.
+1. pass tests, fixture-integrity validation, and policy integrity;
+2. merge the HoldCo G0 registry update;
+3. provision isolated development R2, Vectorize, and Workflow resources;
+4. execute harmless fixture ingestion and revocation acceptance tests;
+5. add the first external embedding-provider adapter behind explicit egress/secret/retention controls;
+6. add tenant authentication, quotas, billing-meter events, and abuse controls;
+7. obtain G1/G2 commercial-context promotion evidence before enabling any external surface.
 
 ## Commercial direction
 
