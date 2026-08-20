@@ -1,6 +1,7 @@
 name: Cloudflare Development Acceptance
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - acceptance/dev-infra-revocation-e2e
