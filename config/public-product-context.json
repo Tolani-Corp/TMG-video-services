@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "1.0.0",
+  "entityId": "tolani.tmg_video_services",
+  "canonicalRepo": "Tolani-Corp/TMG-video-services",
+  "canonicalDomain": null,
+  "classification": "shared_commercial_infrastructure_prototype",
+  "publicStatus": "G0",
+  "commercialAuthority": "local_with_portfolio_governance_prelaunch",
+  "inheritsProtocolFrom": "Tolani-Corp/TolaniCorp-HQ:tolani.portfolio.commercial_context.v1",
+  "audiences": [
+    {
+      "id": "internal_product_teams",
+      "jobToBeDone": "Evaluate governed video intelligence capabilities before any external commercialization."
+    }
+  ],
+  "offers": [
+    {
+      "id": "video_intelligence_core",
+      "status": "internal_only",
+      "description": "Internal prototype for rights-aware temporal video retrieval, vector search, and MCP access."
+    }
+  ],
+  "valueProposition": "Convert authorized video into governed, temporally searchable intelligence without expanding the rights attached to the source media.",
+  "differentiators": [
+    "Purpose-specific rights enforcement before retrieval",
+    "Embedding lineage and provenance preservation",
+    "API and MCP interfaces over one governed retrieval plane"
+  ],
+  "approvedClaims": [],
+  "conditionalClaims": [],
+  "prohibitedClaims": [
+    "Commercial API is live",
+    "Public MCP service is live",
+    "Advertising network or exchange is live",
+    "Rights-cleared dataset marketplace is live",
+    "Vectorization creates or expands media rights",
+    "Unbounded autonomous publication or licensing"
+  ],
+  "proof": [],
+  "primaryCTA": {
+    "label": "Review internal prototype",
+    "route": null,
+    "owner": "TMG Video Services Product Operations",
+    "downstreamState": "internal_prototype_review",
+    "event": "tmg_video_internal_review"
+  },
+  "secondaryCTA": null,
+  "operationalHandoff": {
+    "owner": "TMG Video Services Product Operations",
+    "state": "governed_internal_evaluation",
+    "system": "GitHub"
+  },
+  "pricing": null,
+  "serviceArea": null,
+  "legalAndCompliance": {
+    "rule": "Every source asset must carry explicit provenance and purpose-specific rights. Derived embeddings do not create publication, redistribution, advertising, model-training, dataset-export, or licensing authority."
+  },
+  "seo": {},
+  "analytics": {
+    "events": ["tmg_video_internal_review", "first_value_reached", "return_value_event"],
+    "funnel": ["internal_review", "validated_prototype", "approved_beta", "commercial_outcome"]
+  },
+  "contentOwner": "TMG Video Services",
+  "evidenceOwner": "TMG Video Services Governance Operations",
+  "reviewedAt": "2026-08-20T20:00:00Z",
+  "reviewExpiresAt": "2026-11-20T20:00:00Z"
+}

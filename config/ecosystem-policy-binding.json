@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0.0",
+  "bindingId": "tolani.tmg_video_services.ecosystem_policy.v1",
+  "canonicalPortfolioAuthority": "Tolani-Corp/TolaniCorp-HQ",
+  "sources": [
+    {
+      "id": "commercial_context",
+      "path": "Tolani-Corp/TolaniCorp-HQ/config/portfolio-commercial-registry.json",
+      "required": true
+    },
+    {
+      "id": "public_content_governance",
+      "path": "Tolani-Corp/TolaniCorp-HQ/docs/PUBLIC_CONTENT_GOVERNANCE.md",
+      "required": true
+    }
+  ],
+  "principles": [
+    "canonical_authority_over_local_convenience",
+    "deny_by_default_external_access",
+    "rights_before_retrieval",
+    "provenance_before_derivation",
+    "derived_data_does_not_expand_rights",
+    "human_governed_commercial_promotion",
+    "no_public_claims_before_status_gate",
+    "auditable_policy_decisions"
+  ],
+  "currentPublicStatus": "G0",
+  "externalPublicationAllowed": false,
+  "commercializationAllowed": false
+}
