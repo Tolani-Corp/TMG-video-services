@@ -30,6 +30,11 @@
       "name": "tmg-video-ingestion-dev",
       "binding": "INGEST_WORKFLOW",
       "class_name": "IngestionWorkflow"
+    },
+    {
+      "name": "tmg-video-revocation-dev",
+      "binding": "REVOKE_WORKFLOW",
+      "class_name": "RevocationWorkflow"
     }
   ],
   "observability": {

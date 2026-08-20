@@ -1,0 +1,193 @@
+name: Cloudflare Development Acceptance
+
+on:
+  push:
+    branches:
+      - acceptance/dev-infra-revocation-e2e
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmg-video-cloudflare-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TMG_ACCEPT_WORKER: tmg-video-accept-${{ github.run_id }}
+      TMG_ACCEPT_R2_BUCKET: tmg-video-accept-${{ github.run_id }}
+      TMG_ACCEPT_VECTOR_INDEX: tmg-video-accept-${{ github.run_id }}
+      TMG_ACCEPT_INGEST_WORKFLOW: tmg-video-ingest-accept-${{ github.run_id }}
+      TMG_ACCEPT_REVOKE_WORKFLOW: tmg-video-revoke-accept-${{ github.run_id }}
+      TMG_ACCEPT_METADATA_OUT: metadata-indexes.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify Cloudflare credentials are available
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "::error::Missing CLOUDFLARE_ACCOUNT_ID"; exit 2; }
+
+      - name: Install and validate repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --no-frozen-lockfile
+          pnpm fixture:verify
+          node scripts/render-acceptance-config.mjs
+          pnpm exec wrangler types worker-configuration.d.ts --config .wrangler.acceptance.json
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+
+      - name: Provision isolated R2 and Vectorize resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket create "${TMG_ACCEPT_R2_BUCKET}"
+          pnpm exec wrangler vectorize create "${TMG_ACCEPT_VECTOR_INDEX}" --dimensions 512 --metric cosine
+          node scripts/ensure-metadata-indexes.mjs
+
+      - name: Prove empty index before fixture insertion
+        shell: bash
+        env:
+          EXPECTED_COUNT: "0"
+          QUERY_OUT: query-pre-ingest.json
+        run: node scripts/query-fixture-acceptance.mjs
+
+      - name: Upload harmless fixture to private R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 object put \
+            "${TMG_ACCEPT_R2_BUCKET}/tenants/tmg_fixture/assets/harmless_fixture_001/media/original.mp4" \
+            --file fixtures/harmless/harmless-fixture.mp4 \
+            --content-type video/mp4 \
+            --remote \
+            --config .wrangler.acceptance.json
+
+      - name: Deploy non-public acceptance Worker and Workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --config .wrangler.acceptance.json
+          touch .acceptance-deployed
+
+      - name: Trigger fixture ingestion Workflow
+        id: ingest
+        shell: bash
+        run: |
+          set -euo pipefail
+          INGEST_ID="accept-ingest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CONTROL="$(node -e 'const fs=require("fs");process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync("fixtures/harmless/control.json","utf8"))))')"
+          pnpm exec wrangler workflows trigger "${TMG_ACCEPT_INGEST_WORKFLOW}" "${CONTROL}" \
+            --id "${INGEST_ID}" \
+            --config .wrangler.acceptance.json
+          echo "instance_id=${INGEST_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Prove exactly one review-only internal vector
+        shell: bash
+        env:
+          EXPECTED_COUNT: "1"
+          MAX_ATTEMPTS: "50"
+          QUERY_OUT: query-post-ingest.json
+        run: node scripts/query-fixture-acceptance.mjs
+
+      - name: Capture ingestion Workflow evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler workflows instances describe \
+            "${TMG_ACCEPT_INGEST_WORKFLOW}" \
+            "${{ steps.ingest.outputs.instance_id }}" \
+            --config .wrangler.acceptance.json \
+            > ingestion-workflow.txt
+
+      - name: Trigger fixture revocation Workflow
+        id: revoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          REVOKE_ID="accept-revoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          PAYLOAD="$(node -e 'process.stdout.write(JSON.stringify({tenantId:"tmg_fixture",assetId:"harmless_fixture_001",rightsProfileId:"harmless_fixture_rights_v1",rightsRevision:1,embeddingProfileId:"fixture_video_512_v1",reason:"development_infrastructure_acceptance"}))')"
+          pnpm exec wrangler workflows trigger "${TMG_ACCEPT_REVOKE_WORKFLOW}" "${PAYLOAD}" \
+            --id "${REVOKE_ID}" \
+            --config .wrangler.acceptance.json
+          echo "instance_id=${REVOKE_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Prove Vectorize deletion reached zero matches
+        shell: bash
+        env:
+          EXPECTED_COUNT: "0"
+          MAX_ATTEMPTS: "50"
+          QUERY_OUT: query-post-revocation.json
+        run: node scripts/query-fixture-acceptance.mjs
+
+      - name: Capture revocation Workflow evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler workflows instances describe \
+            "${TMG_ACCEPT_REVOKE_WORKFLOW}" \
+            "${{ steps.revoke.outputs.instance_id }}" \
+            --config .wrangler.acceptance.json \
+            > revocation-workflow.txt
+
+      - name: Prove R2 media and control evidence remain intact
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/tmg_fixture/assets/harmless_fixture_001"
+          pnpm exec wrangler r2 object get "${TMG_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
+            --file /tmp/tmg-accept-media.mp4 --remote --config .wrangler.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_ACCEPT_R2_BUCKET}/${ROOT}/control/manifest-v1.json" \
+            --file /tmp/tmg-accept-manifest.json --remote --config .wrangler.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_ACCEPT_R2_BUCKET}/${ROOT}/control/rights/harmless_fixture_rights_v1/r1.json" \
+            --file /tmp/tmg-accept-rights-r1.json --remote --config .wrangler.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_ACCEPT_R2_BUCKET}/${ROOT}/control/rights/harmless_fixture_rights_v1/r2.json" \
+            --file /tmp/tmg-accept-rights-r2.json --remote --config .wrangler.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_ACCEPT_R2_BUCKET}/${ROOT}/control/index-receipts/fixture_video_512_v1.json" \
+            --file /tmp/tmg-accept-receipt.json --remote --config .wrangler.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_ACCEPT_R2_BUCKET}/${ROOT}/events/revocation/${{ steps.revoke.outputs.instance_id }}.json" \
+            --file /tmp/tmg-accept-revocation.json --remote --config .wrangler.acceptance.json
+          node scripts/verify-r2-acceptance-evidence.mjs
+
+      - name: Disable fixture ingestion after acceptance
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f .acceptance-deployed ]; then
+            pnpm exec wrangler deploy --config .wrangler.acceptance.disabled.json
+          fi
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-video-cloudflare-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            acceptance-evidence.json
+            metadata-indexes.json
+            query-pre-ingest.json
+            query-post-ingest.json
+            query-post-revocation.json
+            ingestion-workflow.txt
+            revocation-workflow.txt
