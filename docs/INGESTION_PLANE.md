@@ -46,7 +46,7 @@ A failed physical-evidence or rights check is a **quarantine outcome**, not a pu
 
 The committed `control.json` binds the exact fixture bytes to:
 
-- SHA-256 `479a18838b9914e6994725f3b8dc7e15bc07ffe80ab3b1c1805e195d0251f1e3`
+- SHA-256 `a4d859d027c3d1a1aa31d1d391b3e0db7e4cbec05b865db3713d851c86b49118`
 - 1,441 bytes
 - one one-second temporal segment
 - `review` publication state
