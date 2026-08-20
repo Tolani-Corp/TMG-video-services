@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 20
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
       TMG_ACCEPT_WORKER: tmg-video-accept-${{ github.run_id }}
       TMG_ACCEPT_R2_BUCKET: tmg-video-accept-${{ github.run_id }}
       TMG_ACCEPT_VECTOR_INDEX: tmg-video-accept-${{ github.run_id }}
@@ -58,7 +58,6 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
-          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "::error::Missing CLOUDFLARE_ACCOUNT_ID"; exit 2; }
 
       - name: Install and validate repository
         shell: bash
