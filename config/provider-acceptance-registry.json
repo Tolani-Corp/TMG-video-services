@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1.0.0",
+  "providers": {
+    "twelvelabs-marengo3": {
+      "state": "development_shadow_verified",
+      "authority": "shadow_only",
+      "profileId": "twelvelabs_marengo3_fused_512_v1",
+      "compatibilityGroup": "marengo3_fused_512_v1",
+      "dimensions": 512,
+      "evidence": {
+        "repository": "Tolani-Corp/TMG-video-services",
+        "headSha": "7a350bd3caf88bd0f331f475f035d1d777c119da",
+        "workflowRunId": 32451894358,
+        "artifactName": "tmg-marengo-shadow-acceptance-32451894358",
+        "artifactDigest": "sha256:8b5d7b56c8a0704a07c417e934978fb41dd876adbf4f9a46d1ced2266bf7699f",
+        "fixtureSha256": "efe031ab35bbd26032f8d1096cb2c2ff737eca79ff1015e09df001e7f90989fe",
+        "acceptedAt": "2026-08-21T05:50:59.044Z"
+      },
+      "promotion": {
+        "authoritativeRoutingAllowed": false,
+        "publicApiAllowed": false,
+        "mcpAllowed": false,
+        "commercialUseAllowed": false,
+        "requiresExplicitReleaseApproval": true
+      }
+    }
+  }
+}
