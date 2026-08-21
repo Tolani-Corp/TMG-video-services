@@ -21,6 +21,22 @@ const indexes = [
 const base =
   `https://api.cloudflare.com/client/v4/accounts/${accountId}/vectorize/v2/indexes/${indexName}/metadata_index`;
 
+function normalizeIndexType(value) {
+  switch (value) {
+    case "String":
+    case "string":
+      return "string";
+    case "Bool":
+    case "boolean":
+      return "boolean";
+    case "Number":
+    case "number":
+      return "number";
+    default:
+      return value;
+  }
+}
+
 async function cf(path, init = {}) {
   const response = await fetch(`${base}${path}`, {
     ...init,
@@ -39,7 +55,12 @@ async function cf(path, init = {}) {
 
 async function list() {
   const result = await cf("/list");
-  return new Map((result.metadataIndexes ?? []).map((item) => [item.propertyName, item.indexType]));
+  return new Map(
+    (result.metadataIndexes ?? []).map((item) => [
+      item.propertyName,
+      normalizeIndexType(item.indexType),
+    ]),
+  );
 }
 
 let current = await list();
