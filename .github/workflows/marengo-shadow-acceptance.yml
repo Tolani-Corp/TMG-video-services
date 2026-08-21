@@ -1,0 +1,210 @@
+name: Marengo Shadow Egress Acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - acceptance/marengo-shadow-egress-e2e
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-marengo-shadow-acceptance-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: ${{ github.event_name != 'pull_request' || github.head_ref == 'acceptance/marengo-shadow-egress-e2e' }}
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY }}
+      ACCEPTANCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TMG_MARENGO_ACCEPT_R2_BUCKET: tmg-marengo-accept-${{ github.run_id }}
+      TMG_MARENGO_ACCEPT_VECTOR_INDEX: tmg-marengo-accept-${{ github.run_id }}
+      TMG_ACCEPT_VECTOR_INDEX: tmg-marengo-accept-${{ github.run_id }}
+      TMG_ACCEPT_METADATA_OUT: marengo-metadata-indexes.json
+      TMG_MARENGO_ACCEPT_MEDIA_PATH: /tmp/tmg-marengo-shadow-fixture.mp4
+      TMG_MARENGO_ACCEPT_STATE_OUT: marengo-shadow-state.json
+      TMG_MARENGO_ACCEPT_VECTOR_OUT: marengo-vector.ndjson
+      TMG_MARENGO_ACCEPT_EVIDENCE_OUT: marengo-shadow-acceptance.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACCEPTANCE_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Mark Marengo acceptance pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"pending\",\"context\":\"tmg-marengo-shadow-acceptance\",\"description\":\"Marengo shadow egress acceptance is running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Verify development credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TWELVELABS_API_KEY"; exit 2; }
+
+      - name: Install and validate repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm fixture:verify
+          pnpm marketing:check
+
+      - name: Verify Marengo fixture integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(stat -c '%s' fixtures/marengo-shadow/marengo-shadow-fixture.mp4)" = "12007"
+          echo "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90  fixtures/marengo-shadow/marengo-shadow-fixture.mp4" | sha256sum --check --strict
+
+      - name: Provision isolated R2 and Marengo Vectorize resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket create "${TMG_MARENGO_ACCEPT_R2_BUCKET}"
+          pnpm exec wrangler vectorize create "${TMG_MARENGO_ACCEPT_VECTOR_INDEX}" --dimensions 512 --metric cosine
+          node scripts/ensure-metadata-indexes.mjs
+
+      - name: Store canonical fixture evidence in private R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/tmg_fixture/assets/harmless_marengo_shadow_fixture_001"
+          pnpm exec wrangler r2 object put \
+            "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
+            --file fixtures/marengo-shadow/marengo-shadow-fixture.mp4 \
+            --content-type video/mp4 --remote
+          pnpm exec wrangler r2 object put \
+            "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/control/manifest-v1.json" \
+            --file fixtures/marengo-shadow/control.json \
+            --content-type application/json --remote
+
+      - name: Rehydrate exact R2 bytes for controlled provider egress
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/tmg_fixture/assets/harmless_marengo_shadow_fixture_001"
+          pnpm exec wrangler r2 object get \
+            "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
+            --file "${TMG_MARENGO_ACCEPT_MEDIA_PATH}" --remote
+          echo "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90  ${TMG_MARENGO_ACCEPT_MEDIA_PATH}" | sha256sum --check --strict
+
+      - name: Upload provider asset and create Marengo fused embedding
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/marengo-shadow-acceptance.mjs prepare
+
+      - name: Insert exactly one review-only Marengo vector
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(wc -l < marengo-vector.ndjson)" -eq 1
+          pnpm exec wrangler vectorize insert "${TMG_MARENGO_ACCEPT_VECTOR_INDEX}" \
+            --file marengo-vector.ndjson --json > marengo-vector-insert.json
+
+      - name: Prove internal retrieval, revoke vector, and delete provider asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/marengo-shadow-acceptance.mjs verify-revoke
+
+      - name: Prove private R2 evidence survives provider and vector revocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/tmg_fixture/assets/harmless_marengo_shadow_fixture_001"
+          pnpm exec wrangler r2 object get \
+            "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
+            --file /tmp/tmg-marengo-shadow-preserved.mp4 --remote
+          echo "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90  /tmp/tmg-marengo-shadow-preserved.mp4" | sha256sum --check --strict
+          node -e 'const fs=require("fs");const p="marengo-shadow-acceptance.json";const e=JSON.parse(fs.readFileSync(p,"utf8"));e.r2={bucket:process.env.TMG_MARENGO_ACCEPT_R2_BUCKET,mediaPreserved:true,sha256:"82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90"};fs.writeFileSync(p,JSON.stringify(e,null,2)+"\n")'
+
+      - name: Delete isolated Marengo acceptance Vectorize index
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler vectorize delete "${TMG_MARENGO_ACCEPT_VECTOR_INDEX}" --force
+
+      - name: Upload Marengo acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-marengo-shadow-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            marengo-metadata-indexes.json
+            marengo-shadow-state.json
+            marengo-vector.ndjson
+            marengo-vector-insert.json
+            marengo-shadow-acceptance.json
+
+      - name: Cleanup TwelveLabs asset on partial failure
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          node scripts/marengo-shadow-acceptance.mjs cleanup
+
+      - name: Mark Marengo acceptance success
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"tmg-marengo-shadow-acceptance\",\"description\":\"R2 → Marengo → Vectorize → revoke → provider cleanup passed\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark Marengo acceptance failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"tmg-marengo-shadow-acceptance\",\"description\":\"Marengo shadow acceptance failed; inspect evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
