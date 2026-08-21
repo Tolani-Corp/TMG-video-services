@@ -40,6 +40,13 @@ export const DEFAULT_MODEL_COMPATIBILITY_REGISTRY: ModelCompatibilityRegistry = 
       vectorIndexBinding: "VIDEO_INDEX",
       state: "development",
     },
+    {
+      id: "marengo3_fused_512_v1",
+      dimensions: 512,
+      metric: "cosine",
+      vectorIndexBinding: "MARENGO_VIDEO_INDEX",
+      state: "development",
+    },
   ],
   providers: [
     {
@@ -55,6 +62,21 @@ export const DEFAULT_MODEL_COMPATIBILITY_REGISTRY: ModelCompatibilityRegistry = 
         dimensions: 512,
         modalities: ["visual", "audio", "transcription", "fused"],
         compatibilityGroup: "fixture_video_512",
+      },
+    },
+    {
+      id: "twelvelabs-marengo3",
+      status: "shadow",
+      egressClass: "external",
+      acceptanceRequirement: "development_acceptance",
+      profile: {
+        id: "twelvelabs_marengo3_fused_512_v1",
+        provider: "twelvelabs",
+        model: "marengo3.0",
+        modelVersion: "3.0",
+        dimensions: 512,
+        modalities: ["visual", "audio", "transcription", "fused"],
+        compatibilityGroup: "marengo3_fused_512_v1",
       },
     },
   ],
