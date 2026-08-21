@@ -15,7 +15,11 @@ export interface TenantUsageLedgerDecision {
   usage: UsageSnapshot;
 }
 
-interface StoredUsageRow {
+interface LedgerMetadataRow extends Record<string, SqlStorageValue> {
+  value: string;
+}
+
+interface StoredUsageRow extends Record<string, SqlStorageValue> {
   event_id: string;
   occurred_at_ms: number;
   tenant_id: string;
@@ -28,7 +32,7 @@ interface StoredUsageRow {
   billing_disposition: string;
 }
 
-interface AggregateUsageRow {
+interface AggregateUsageRow extends Record<string, SqlStorageValue> {
   requests_this_hour: number;
   media_duration_ms_today: number;
   vectors_today: number;
@@ -72,7 +76,7 @@ export class TenantUsageLedger extends DurableObject<Env> {
     }
 
     const tenantBinding = this.ctx.storage.sql
-      .exec<{ value: string }>("SELECT value FROM ledger_metadata WHERE key = 'tenant_id'")
+      .exec<LedgerMetadataRow>("SELECT value FROM ledger_metadata WHERE key = 'tenant_id'")
       .toArray()[0];
     if (!tenantBinding) {
       this.ctx.storage.sql.exec(
