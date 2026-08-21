@@ -20,7 +20,7 @@ const manifest: CanonicalAssetManifest = {
   },
   media: {
     objectKey: "tenants/tmg_fixture/assets/fixture_asset_1/media/original.mp4",
-    sha256: "a4d859d027c3d1a1aa31d1d391b3e0db7e4cbec05b865db3713d851c86b49118",
+    sha256: "479a18838b9914e6994725f3b8dc7e15bc07ffe80ab3b1c1805e195d0251f1e3",
     bytes: 1441,
     mimeType: "video/mp4",
     durationMs: 2000,

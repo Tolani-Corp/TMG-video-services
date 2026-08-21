@@ -14,6 +14,7 @@ function readJson(path) {
 const context = readJson("config/public-product-context.json");
 const binding = readJson("config/ecosystem-policy-binding.json");
 const retrieval = readJson("config/retrieval-policy.json");
+const providers = readJson("config/model-compatibility-registry.json");
 const wrangler = readJson("wrangler.jsonc");
 const fixture = readJson("fixtures/harmless/control.json");
 
@@ -54,6 +55,15 @@ if (context.publicStatus === "G0") {
   if (wrangler.vars?.TMG_INGESTION_MODE !== "fixture_only") {
     failures.push("G0 ingestion mode must remain fixture_only");
   }
+  if (wrangler.vars?.TMG_EMBEDDING_PROVIDER_ID !== "fixture") {
+    failures.push("G0 default embedding provider must remain fixture");
+  }
+  if (wrangler.vars?.TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED !== "false") {
+    failures.push("G0 external provider egress must remain disabled");
+  }
+  if (wrangler.vars?.TMG_PROVIDER_ACCEPTANCE_STATE !== "unverified") {
+    failures.push("G0 provider acceptance state must remain unverified until acceptance evidence is explicitly promoted");
+  }
 }
 
 if (!context.primaryCTA?.owner || !context.primaryCTA?.downstreamState || !context.primaryCTA?.event) {
@@ -80,6 +90,22 @@ for (const purpose of ["external_api", "mcp", "advertising", "dataset_export", "
   const rule = retrieval.purposes?.[purpose];
   if (!rule?.requiresVerifiedRightsEvidence || !rule?.requiresApprovedPublicationState || !rule?.requiresExplicitPurposeGrant) {
     failures.push(`${purpose}: external/commercial retrieval must require verified rights, approved publication, and explicit purpose grant`);
+  }
+}
+
+if (providers.defaultProviderId !== "fixture") {
+  failures.push("model registry default provider must remain fixture at G0");
+}
+if (providers.externalProviderEgressAllowed !== false) {
+  failures.push("model registry external provider egress must remain false at G0");
+}
+const fixtureProvider = (providers.providers ?? []).find((provider) => provider.id === "fixture");
+if (!fixtureProvider || fixtureProvider.status !== "enabled" || fixtureProvider.egressClass !== "none") {
+  failures.push("fixture provider must remain enabled and no-egress");
+}
+for (const provider of providers.providers ?? []) {
+  if (provider.id !== "fixture" && provider.status === "enabled") {
+    failures.push(`external/non-fixture provider ${provider.id} cannot be enabled at G0`);
   }
 }
 

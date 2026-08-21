@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0.0",
+  "defaultProviderId": "fixture",
+  "externalProviderEgressAllowed": false,
+  "compatibilityGroups": [
+    {
+      "id": "fixture_video_512",
+      "dimensions": 512,
+      "metric": "cosine",
+      "vectorIndexBinding": "VIDEO_INDEX",
+      "state": "development"
+    }
+  ],
+  "providers": [
+    {
+      "id": "fixture",
+      "status": "enabled",
+      "egressClass": "none",
+      "acceptanceRequirement": "none",
+      "profile": {
+        "id": "fixture_video_512_v1",
+        "provider": "fixture",
+        "model": "deterministic-sha256-fixture",
+        "modelVersion": "1",
+        "dimensions": 512,
+        "modalities": ["visual", "audio", "transcription", "fused"],
+        "compatibilityGroup": "fixture_video_512"
+      }
+    }
+  ]
+}

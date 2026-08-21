@@ -3,7 +3,7 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from "cloudflare:workers";
-import { DeterministicFixtureEmbeddingProvider } from "./fixture-provider";
+import { buildEmbeddingUsageEvent } from "./embedding-telemetry";
 import {
   buildArtifactKeys,
   buildVideoSegmentRecords,
@@ -13,6 +13,7 @@ import {
 } from "./ingestion";
 import { prepareVectorUpsert } from "./indexing";
 import { verifyPhysicalMediaEvidence } from "./physical-evidence";
+import { EmbeddingProviderRouter, providerPolicyFromEnv } from "./provider-router";
 import type { IndexReceipt } from "./revocation";
 import { requireVectorizeAsyncMutationId } from "./vector-mutation";
 
@@ -23,6 +24,8 @@ interface IngestionWorkflowResult {
   mutationId?: string;
   vectorCount?: number;
   receiptKey?: string;
+  providerId?: string;
+  usageEventKey?: string;
 }
 
 async function putJson(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
@@ -96,8 +99,10 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
       };
     }
 
-    const dimensions = Number(this.env.TMG_EMBEDDING_DIMENSIONS);
-    const provider = new DeterministicFixtureEmbeddingProvider(dimensions);
+    const resolution = await step.do("resolve governed embedding provider", async () =>
+      new EmbeddingProviderRouter().resolve(providerPolicyFromEnv(this.env)),
+    );
+    const provider = resolution.provider;
     const records = buildVideoSegmentRecords(
       request.manifest,
       request.rights,
@@ -107,7 +112,7 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
     );
 
     const indexResult = await step.do(
-      "generate deterministic fixture embeddings and index",
+      "generate governed embeddings and index",
       { retries: { limit: 3, delay: "5 seconds", backoff: "exponential" } },
       async () => {
         const prepared = [];
@@ -143,9 +148,23 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
       status: "indexed",
     };
     const receiptKey = keys.indexReceipt(indexResult.embeddingProfileId);
+    const usageEventKey = `${keys.assetRoot}/events/embedding/${event.instanceId}.json`;
+    const usageEvent = buildEmbeddingUsageEvent({
+      registryEntry: resolution.registryEntry,
+      tenantId: request.manifest.tenantId,
+      assetId: request.manifest.assetId,
+      segmentCount: records.length,
+      mediaDurationMs: request.manifest.media.durationMs,
+      inputBytes: request.manifest.media.bytes,
+      vectorCount: indexResult.vectorIds.length,
+      createdAt: nowIso,
+    });
 
-    await step.do("persist index receipt", async () => {
-      await putJson(this.env.MEDIA_BUCKET, receiptKey, receipt);
+    await step.do("persist index receipt and provider usage evidence", async () => {
+      await Promise.all([
+        putJson(this.env.MEDIA_BUCKET, receiptKey, receipt),
+        putJson(this.env.MEDIA_BUCKET, usageEventKey, usageEvent),
+      ]);
     });
 
     return {
@@ -154,6 +173,8 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
       mutationId: indexResult.mutationId,
       vectorCount: indexResult.vectorIds.length,
       receiptKey,
+      providerId: resolution.registryEntry.id,
+      usageEventKey,
     };
   }
 }
