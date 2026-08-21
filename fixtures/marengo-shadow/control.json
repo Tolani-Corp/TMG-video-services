@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0.0",
+  "assetId": "harmless_marengo_shadow_fixture_001",
+  "tenantId": "tmg_fixture",
+  "purpose": "development_shadow_egress_acceptance",
+  "publicationState": "review",
+  "media": {
+    "integrityMode": "runtime_bound",
+    "generationRecipe": {
+      "durationSeconds": 5,
+      "video": "synthetic black frame, 360x360, 25fps, H.264 main, yuv420p",
+      "audio": "synthetic 440 Hz tone, AAC mono, 48 kHz"
+    }
+  },
+  "rights": {
+    "rightsProfileId": "harmless_marengo_shadow_rights_v1",
+    "evidenceState": "verified",
+    "sourceEvidenceRef": "repo://Tolani-Corp/TMG-video-services/fixtures/marengo-shadow/control.json",
+    "allowedTenantIds": ["tmg_fixture"],
+    "grants": {
+      "externalApi": false,
+      "mcp": false,
+      "advertising": false,
+      "datasetExport": false,
+      "licensing": false
+    }
+  },
+  "providerUse": {
+    "provider": "twelvelabs-marengo3",
+    "model": "marengo3.0",
+    "mode": "shadow",
+    "authority": "development_acceptance_only",
+    "cleanupRequired": true
+  }
+}
