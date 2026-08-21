@@ -87,8 +87,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(stat -c '%s' fixtures/marengo-shadow/marengo-shadow-fixture.mp4)" = "12007"
-          echo "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90  fixtures/marengo-shadow/marengo-shadow-fixture.mp4" | sha256sum --check --strict
+          actual_bytes="$(stat -c '%s' fixtures/marengo-shadow/marengo-shadow-fixture.mp4)"
+          actual_sha="$(sha256sum fixtures/marengo-shadow/marengo-shadow-fixture.mp4 | awk '{print $1}')"
+          echo "marengo fixture actual bytes=${actual_bytes} sha256=${actual_sha}"
+          test "${actual_bytes}" = "10808"
+          test "${actual_sha}" = "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90"
 
       - name: Provision isolated R2 and Marengo Vectorize resources
         shell: bash
