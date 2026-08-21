@@ -1,0 +1,277 @@
+name: Derived Rights Cascade Development Acceptance
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-derived-rights-cascade-acceptance-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: ${{ github.event_name != 'pull_request' || github.head_ref == 'acceptance/derived-rights-cascade-e2e' }}
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY || secrets.TWELVELABS_KEY || secrets.TWELVE_LABS_API_KEY || secrets.TWELVELABS_API || secrets.TWELVELABS }}
+      ACCEPTANCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TMG_MEDIA_BUCKET: tmg-cascade-accept-${{ github.run_id }}
+      TMG_MARENGO_SHADOW_INDEX: tmg-cascade-accept-${{ github.run_id }}
+      TMG_ACCEPT_VECTOR_INDEX: tmg-cascade-accept-${{ github.run_id }}
+      TMG_ACCEPT_METADATA_OUT: cascade-accept-metadata-indexes.json
+      TMG_PROVIDER_ACCEPTANCE_REGISTRY_PATH: config/provider-acceptance-registry.json
+      TMG_SEGMENT_TENANT_ID: tmg_fixture
+      TMG_SEGMENT_PARENT_ASSET_ID: harmless_temporal_parent_001
+      TMG_SEGMENT_RIGHTS_PROFILE_ID: harmless_temporal_parent_rights_v1
+      TMG_SEGMENT_RIGHTS_REVISION: 1
+      TMG_SEGMENT_PLAN_JSON: '[{"segmentId":"s000","startMs":0,"endMs":10000},{"segmentId":"s001","startMs":10000,"endMs":25000},{"segmentId":"s002","startMs":25000,"endMs":45000}]'
+      TMG_SEGMENT_PARENT_MANIFEST_PATH: /tmp/tmg-cascade-parent-manifest.json
+      TMG_SEGMENT_PARENT_RIGHTS_PATH: /tmp/tmg-cascade-parent-rights-r1.json
+      TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH: /tmp/tmg-cascade-parent-current.json
+      TMG_SEGMENT_SOURCE_MEDIA_PATH: /tmp/tmg-cascade-parent-rehydrated.mp4
+      TMG_SEGMENT_OUTPUT_DIR: /tmp/tmg-cascade-segments
+      TMG_SEGMENT_INDEX_PATH: /tmp/tmg-cascade-segments/index.json
+      TMG_TEMPORAL_ACCEPT_EVIDENCE_OUT: cascade-prechange-evidence.json
+      TMG_TEMPORAL_ACCEPT_PRESERVATION: /tmp/tmg-cascade-preservation.json
+      TMG_CASCADE_TENANT_ID: tmg_fixture
+      TMG_CASCADE_PARENT_ASSET_ID: harmless_temporal_parent_001
+      TMG_CASCADE_PARENT_RIGHTS_PROFILE_ID: harmless_temporal_parent_rights_v1
+      TMG_CASCADE_PARENT_CURRENT_RIGHTS_PATH: /tmp/tmg-cascade-parent-current.json
+      TMG_CASCADE_PLAN_PATH: /tmp/tmg-cascade-segments/index.json
+      TMG_CASCADE_OUTPUT_ROOT: /tmp/tmg-derived-rights-cascade
+      TMG_CASCADE_SUMMARY_PATH: /tmp/tmg-derived-rights-cascade-summary.json
+      TMG_CASCADE_REASON: synthetic_parent_rights_revocation_acceptance
+      TMG_CASCADE_FINAL_EVIDENCE: derived-rights-cascade-acceptance.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACCEPTANCE_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Validate credentials and repository controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TWELVELABS_API_KEY"; exit 2; }
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Generate harmless parent and seed isolated private R2 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/temporal-segment-acceptance.mjs generate
+          pnpm exec wrangler r2 bucket create "${TMG_MEDIA_BUCKET}"
+          ROOT="tenants/tmg_fixture/assets/harmless_temporal_parent_001"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/media/original.mp4" --file /tmp/tmg-temporal-parent.mp4 --content-type video/mp4 --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/manifest-v1.json" --file "${TMG_SEGMENT_PARENT_MANIFEST_PATH}" --content-type application/json --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/harmless_temporal_parent_rights_v1/r1.json" --file "${TMG_SEGMENT_PARENT_RIGHTS_PATH}" --content-type application/json --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/harmless_temporal_parent_rights_v1/current.json" --file "${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" --content-type application/json --remote
+
+      - name: Rehydrate exact parent and materialize three governed children
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${TMG_SEGMENT_SOURCE_OBJECT_KEY}" --file "${TMG_SEGMENT_SOURCE_MEDIA_PATH}" --remote
+          test "$(sha256sum "${TMG_SEGMENT_SOURCE_MEDIA_PATH}" | awk '{print $1}')" = "${TMG_TEMPORAL_PARENT_SHA256}"
+          test "$(stat -c '%s' "${TMG_SEGMENT_SOURCE_MEDIA_PATH}")" = "${TMG_TEMPORAL_PARENT_BYTES}"
+          node scripts/materialize-temporal-segments.mjs preflight
+          node scripts/materialize-temporal-segments.mjs materialize
+          test "$(node -e 'const i=require(process.env.TMG_SEGMENT_INDEX_PATH);process.stdout.write(String(i.children.length))')" = "3"
+          PLAN_ID="$(node -e 'const i=require(process.env.TMG_SEGMENT_INDEX_PATH);process.stdout.write(i.planId)')"
+          echo "TMG_CASCADE_PLAN_ID=${PLAN_ID}" >> "${GITHUB_ENV}"
+
+      - name: Persist child media, rights, lineage, and immutable plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/cascade-upload.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.mediaObjectKey,c.manifestKey,c.rightsKey,c.currentRightsKey,c.derivationKey,c.files.media,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation].join('\t'));
+          NODE
+          while IFS=$'\t' read -r MEDIA_KEY MANIFEST_KEY RIGHTS_KEY CURRENT_KEY DERIVATION_KEY MEDIA_FILE MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE; do
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${MEDIA_KEY}" --file "${MEDIA_FILE}" --content-type video/mp4 --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${MANIFEST_KEY}" --file "${MANIFEST_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${RIGHTS_KEY}" --file "${RIGHTS_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CURRENT_KEY}" --file "${CURRENT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${DERIVATION_KEY}" --file "${DERIVATION_FILE}" --content-type application/json --remote
+          done < /tmp/cascade-upload.tsv
+          ROOT="tenants/tmg_fixture/assets/harmless_temporal_parent_001"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/temporal-segments/${TMG_CASCADE_PLAN_ID}.json" --file "${TMG_SEGMENT_INDEX_PATH}" --content-type application/json --remote
+
+      - name: Create isolated Marengo index with eight governance metadata indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ensure-shadow-vector-index.mjs
+          node scripts/ensure-metadata-indexes.mjs
+
+      - name: Evaluate all three children and prove vectors live before parent change
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/cascade-eval.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.childAssetId,c.childRightsProfileId,c.childRoot,c.files.media,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation,c.files.receipt,c.files.event].join('\t'));
+          NODE
+          while IFS=$'\t' read -r CHILD_ASSET CHILD_RIGHTS CHILD_ROOT MEDIA_FILE MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE RECEIPT_FILE EVENT_FILE; do
+            export TMG_SHADOW_ACTION=evaluate TMG_SHADOW_TENANT_ID=tmg_fixture TMG_SHADOW_ASSET_ID="${CHILD_ASSET}" TMG_SHADOW_RIGHTS_PROFILE_ID="${CHILD_RIGHTS}" TMG_SHADOW_RIGHTS_REVISION=1
+            export TMG_SHADOW_MANIFEST_PATH="${MANIFEST_FILE}" TMG_SHADOW_RIGHTS_PATH="${RIGHTS_FILE}" TMG_SHADOW_CURRENT_RIGHTS_PATH="${CURRENT_FILE}" TMG_SHADOW_DERIVATION_PATH="${DERIVATION_FILE}"
+            export TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" TMG_SHADOW_PARENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_RIGHTS_PATH}" TMG_SHADOW_MEDIA_PATH="${MEDIA_FILE}" TMG_SHADOW_RECEIPT_PATH="${RECEIPT_FILE}" TMG_SHADOW_EVENT_PATH="${EVENT_FILE}"
+            node scripts/validate-shadow-current-rights.mjs
+            node scripts/marengo-shadow-evaluate.mjs preflight
+            node scripts/marengo-shadow-evaluate.mjs evaluate
+            cp "${RECEIPT_FILE}" "$(dirname "${RECEIPT_FILE}")/evaluation-receipt.json"
+            cp "${EVENT_FILE}" "$(dirname "${EVENT_FILE}")/evaluation-event.json"
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" --file "${RECEIPT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/shadow-evaluation/${GITHUB_RUN_ID}.json" --file "${EVENT_FILE}" --content-type application/json --remote
+          done < /tmp/cascade-eval.tsv
+          node scripts/temporal-segment-acceptance.mjs verify-evaluated
+
+      - name: Advance parent rights to revoked revision 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const r1=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_PARENT_RIGHTS_PATH,'utf8'));
+          const at=new Date().toISOString();
+          const r2={...r1,evidenceState:'revoked',grants:{externalApi:false,mcp:false,advertising:false,datasetExport:false,licensing:false},revision:2,updatedAt:at,revokedAt:at,revocationReason:'synthetic cascade acceptance parent revocation'};
+          const root=`tenants/${r1.tenantId}/assets/${r1.assetId}`;
+          const current={schemaVersion:'1.0.0',tenantId:r1.tenantId,assetId:r1.assetId,rightsProfileId:r1.rightsProfileId,currentRevision:2,evidenceState:'revoked',updatedAt:at,revisionKey:`${root}/control/rights/${r1.rightsProfileId}/r2.json`};
+          fs.writeFileSync('/tmp/tmg-cascade-parent-rights-r2.json',JSON.stringify(r2,null,2)+'\n');
+          fs.writeFileSync(process.env.TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH,JSON.stringify(current,null,2)+'\n');
+          NODE
+          ROOT="tenants/tmg_fixture/assets/harmless_temporal_parent_001"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/harmless_temporal_parent_rights_v1/r2.json" --file /tmp/tmg-cascade-parent-rights-r2.json --content-type application/json --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/harmless_temporal_parent_rights_v1/current.json" --file "${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" --content-type application/json --remote
+          node scripts/derived-rights-cascade.mjs validate-parent
+
+      - name: Cascade parent rights revocation to children and delete exact shadow vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TMG_CASCADE_OUTPUT_ROOT}"
+          node - <<'NODE' > /tmp/cascade-children.tsv
+          const fs=require('fs');const plan=JSON.parse(fs.readFileSync(process.env.TMG_CASCADE_PLAN_PATH,'utf8'));
+          for(const c of plan.children) console.log([c.childAssetId,c.childRightsProfileId,c.childRoot,c.manifestKey,c.currentRightsKey].join('\t'));
+          NODE
+          while IFS=$'\t' read -r CHILD_ASSET CHILD_RIGHTS CHILD_ROOT MANIFEST_KEY CURRENT_KEY; do
+            OUT="${TMG_CASCADE_OUTPUT_ROOT}/${CHILD_ASSET}"; mkdir -p "${OUT}"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${MANIFEST_KEY}" --file "${OUT}/manifest.json" --remote
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${CURRENT_KEY}" --file "${OUT}/current-before.json" --remote
+            REVISION_KEY="$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(x.revisionKey)' "${OUT}/current-before.json")"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${REVISION_KEY}" --file "${OUT}/rights-before.json" --remote
+            RECEIPT_KEY="${CHILD_ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" --file "${OUT}/shadow-receipt.json" --remote
+            export TMG_CASCADE_CHILD_MANIFEST_PATH="${OUT}/manifest.json" TMG_CASCADE_CHILD_CURRENT_RIGHTS_PATH="${OUT}/current-before.json" TMG_CASCADE_CHILD_RIGHTS_PATH="${OUT}/rights-before.json" TMG_CASCADE_CHILD_SHADOW_RECEIPT_PATH="${OUT}/shadow-receipt.json" TMG_CASCADE_CHILD_OUTPUT_DIR="${OUT}"
+            node scripts/derived-rights-cascade.mjs prepare-child
+            test "$(node -e 'const x=require(process.argv[1]);process.stdout.write(x.status)' "${OUT}/cascade-result.json")" = "revoked"
+            NEW_REV="$(node -e 'const x=require(process.argv[1]);process.stdout.write(String(x.revision))' "${OUT}/revoked-rights.json")"
+            test "${NEW_REV}" = "2"
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/rights/${CHILD_RIGHTS}/r2.json" --file "${OUT}/revoked-rights.json" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/rights/${CHILD_RIGHTS}/current.json" --file "${OUT}/current-rights.json" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/derived-rights-cascade/${GITHUB_RUN_ID}.json" --file "${OUT}/cascade-event.json" --content-type application/json --remote
+            export TMG_CASCADE_CHILD_RESULT_PATH="${OUT}/cascade-result.json" TMG_CASCADE_CHILD_REVOKED_RECEIPT_PATH="${OUT}/shadow-revoked-receipt.json" TMG_CASCADE_CHILD_SHADOW_EVENT_PATH="${OUT}/shadow-revocation-event.json"
+            node scripts/derived-rights-cascade.mjs delete-shadow
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" --file "${OUT}/shadow-revoked-receipt.json" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/shadow-revocation/${GITHUB_RUN_ID}-cascade.json" --file "${OUT}/shadow-revocation-event.json" --content-type application/json --remote
+          done < /tmp/cascade-children.tsv
+          node scripts/derived-rights-cascade.mjs summarize
+          ROOT="tenants/tmg_fixture/assets/harmless_temporal_parent_001"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/events/derived-rights-cascade/${GITHUB_RUN_ID}.json" --file "${TMG_CASCADE_SUMMARY_PATH}" --content-type application/json --remote
+
+      - name: Prove zero vectors, revoked child rights, and preserved R2 media/lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tmg-cascade-preserved
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${TMG_SEGMENT_SOURCE_OBJECT_KEY}" --file /tmp/tmg-cascade-preserved/parent.mp4 --remote
+          test "$(sha256sum /tmp/tmg-cascade-preserved/parent.mp4 | awk '{print $1}')" = "${TMG_TEMPORAL_PARENT_SHA256}"
+          node - <<'NODE' > /tmp/cascade-preserve.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.childAssetId,c.childRightsProfileId,c.mediaObjectKey,c.sourceSha256,c.derivationKey,c.currentRightsKey].join('\t'));
+          NODE
+          children=0; lineage=0; revoked=0
+          while IFS=$'\t' read -r CHILD CHILD_RIGHTS MEDIA_KEY SHA DERIVATION_KEY CURRENT_KEY; do
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${MEDIA_KEY}" --file "/tmp/tmg-cascade-preserved/${CHILD}.mp4" --remote
+            test "$(sha256sum "/tmp/tmg-cascade-preserved/${CHILD}.mp4" | awk '{print $1}')" = "${SHA}"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${DERIVATION_KEY}" --file "/tmp/tmg-cascade-preserved/${CHILD}-derivation.json" --remote
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${CURRENT_KEY}" --file "/tmp/tmg-cascade-preserved/${CHILD}-current.json" --remote
+            node -e 'const x=require(process.argv[1]);if(x.currentRevision!==2||x.evidenceState!=="revoked")process.exit(1)' "/tmp/tmg-cascade-preserved/${CHILD}-current.json"
+            children=$((children+1)); lineage=$((lineage+1)); revoked=$((revoked+1))
+          done < /tmp/cascade-preserve.tsv
+          node - <<'NODE'
+          const fs=require('fs');
+          const index=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          const summary=JSON.parse(fs.readFileSync(process.env.TMG_CASCADE_SUMMARY_PATH,'utf8'));
+          const ids=index.children.map(c=>JSON.parse(fs.readFileSync(`${process.env.TMG_CASCADE_OUTPUT_ROOT}/${c.childAssetId}/shadow-revoked-receipt.json`,'utf8')).vectorId);
+          const account=process.env.CLOUDFLARE_ACCOUNT_ID,indexName=process.env.TMG_MARENGO_SHADOW_INDEX,token=process.env.CLOUDFLARE_API_TOKEN;
+          const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/vectorize/v2/indexes/${encodeURIComponent(indexName)}/get_by_ids`,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({ids})});
+          const b=await r.json(); if(!r.ok||b?.success!==true) throw new Error('Vectorize verification failed');
+          const remaining=Array.isArray(b.result)?b.result.length:0; if(remaining!==0) throw new Error(`Expected zero vectors, got ${remaining}`);
+          if(summary.childCount!==3||summary.revokedChildren!==3||summary.deletedShadowVectors!==3) throw new Error('Cascade summary mismatch');
+          const out={schemaVersion:'1.0.0',status:'passed',purpose:'derived_rights_cascade_development_acceptance',runId:process.env.GITHUB_RUN_ID,bucket:process.env.TMG_MEDIA_BUCKET,index:process.env.TMG_MARENGO_SHADOW_INDEX,planId:index.planId,parent:{assetId:index.parentAssetId,materializedRightsRevision:index.parentRightsRevision,currentRightsRevision:2,evidenceState:'revoked',sha256:process.env.TMG_TEMPORAL_PARENT_SHA256},children:{count:3,revokedRights:3,deletedShadowVectors:3,postDeleteCount:0,mediaPreserved:3,lineagePreserved:3},deleteMutationIds:summary.children.map(c=>c.shadowRevocation?.deleteMutationId).filter(Boolean),completedAt:new Date().toISOString()};
+          if(out.deleteMutationIds.length!==3||new Set(out.deleteMutationIds).size!==3) throw new Error('Expected three distinct delete mutation IDs');
+          fs.writeFileSync(process.env.TMG_CASCADE_FINAL_EVIDENCE,JSON.stringify(out,null,2)+'\n');
+          console.log(JSON.stringify(out));
+          NODE
+
+      - name: Upload cascade acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-derived-rights-cascade-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.TMG_CASCADE_FINAL_EVIDENCE }}
+            cascade-prechange-evidence.json
+            cascade-accept-metadata-indexes.json
+            ${{ env.TMG_SEGMENT_INDEX_PATH }}
+            ${{ env.TMG_CASCADE_SUMMARY_PATH }}
+            /tmp/tmg-cascade-parent-rights-r2.json
+            /tmp/tmg-cascade-preserved/*-current.json
+            /tmp/tmg-derived-rights-cascade/*/cascade-result.json
+            /tmp/tmg-derived-rights-cascade/*/revoked-rights.json
+            /tmp/tmg-derived-rights-cascade/*/cascade-event.json
+            /tmp/tmg-derived-rights-cascade/*/shadow-revoked-receipt.json
+            /tmp/tmg-derived-rights-cascade/*/shadow-revocation-event.json
+
+      - name: Cleanup isolated acceptance Vectorize index
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          node - <<'NODE'
+          const account=process.env.CLOUDFLARE_ACCOUNT_ID,index=process.env.TMG_MARENGO_SHADOW_INDEX,token=process.env.CLOUDFLARE_API_TOKEN;
+          if(!account||!index||!token) process.exit(0);
+          const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/vectorize/v2/indexes/${encodeURIComponent(index)}`,{method:'DELETE',headers:{authorization:`Bearer ${token}`}});
+          if(r.status===404){console.log('Vectorize index already absent');process.exit(0)}
+          const text=await r.text(); if(!r.ok){console.error(`cleanup failed ${r.status}: ${text.slice(0,500)}`);process.exit(1)}
+          console.log(`deleted isolated Vectorize index ${index}`);
+          NODE
