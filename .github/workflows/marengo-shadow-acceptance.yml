@@ -26,7 +26,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
-      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY || vars.TWELVELABS_API_KEY }}
+      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY || secrets.TWELVELABS_KEY || secrets.TWELVE_LABS_API_KEY || secrets.TWELVELABS_API || secrets.TWELVELABS || vars.TWELVELABS_API_KEY || vars.TWELVELABS_KEY || vars.TWELVE_LABS_API_KEY || vars.TWELVELABS_API || vars.TWELVELABS }}
       ACCEPTANCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       TMG_MARENGO_ACCEPT_R2_BUCKET: tmg-marengo-accept-${{ github.run_id }}
       TMG_MARENGO_ACCEPT_VECTOR_INDEX: tmg-marengo-accept-${{ github.run_id }}
@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
-          test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TWELVELABS_API_KEY"; exit 2; }
+          test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TwelveLabs credential. Expected one of: TWELVELABS_API_KEY, TWELVELABS_KEY, TWELVE_LABS_API_KEY, TWELVELABS_API, TWELVELABS"; exit 2; }
 
       - name: Install and validate repository
         shell: bash
