@@ -91,7 +91,7 @@ jobs:
           actual_sha="$(sha256sum fixtures/marengo-shadow/marengo-shadow-fixture.mp4 | awk '{print $1}')"
           echo "marengo fixture actual bytes=${actual_bytes} sha256=${actual_sha}"
           test "${actual_bytes}" = "10808"
-          test "${actual_sha}" = "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90"
+          test "${actual_sha}" = "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02"
 
       - name: Provision isolated R2 and Marengo Vectorize resources
         shell: bash
@@ -123,7 +123,7 @@ jobs:
           pnpm exec wrangler r2 object get \
             "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
             --file "${TMG_MARENGO_ACCEPT_MEDIA_PATH}" --remote
-          echo "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90  ${TMG_MARENGO_ACCEPT_MEDIA_PATH}" | sha256sum --check --strict
+          echo "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02  ${TMG_MARENGO_ACCEPT_MEDIA_PATH}" | sha256sum --check --strict
 
       - name: Upload provider asset and create Marengo fused embedding
         shell: bash
@@ -153,8 +153,8 @@ jobs:
           pnpm exec wrangler r2 object get \
             "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
             --file /tmp/tmg-marengo-shadow-preserved.mp4 --remote
-          echo "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90  /tmp/tmg-marengo-shadow-preserved.mp4" | sha256sum --check --strict
-          node -e 'const fs=require("fs");const p="marengo-shadow-acceptance.json";const e=JSON.parse(fs.readFileSync(p,"utf8"));e.r2={bucket:process.env.TMG_MARENGO_ACCEPT_R2_BUCKET,mediaPreserved:true,sha256:"82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90"};fs.writeFileSync(p,JSON.stringify(e,null,2)+"\n")'
+          echo "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02  /tmp/tmg-marengo-shadow-preserved.mp4" | sha256sum --check --strict
+          node -e 'const fs=require("fs");const p="marengo-shadow-acceptance.json";const e=JSON.parse(fs.readFileSync(p,"utf8"));e.r2={bucket:process.env.TMG_MARENGO_ACCEPT_R2_BUCKET,mediaPreserved:true,sha256:"b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02"};fs.writeFileSync(p,JSON.stringify(e,null,2)+"\n")'
 
       - name: Delete isolated Marengo acceptance Vectorize index
         shell: bash
