@@ -79,13 +79,15 @@ for (const [propertyName, indexType] of indexes) {
   console.log(`enqueued metadata index ${propertyName}:${indexType} mutation=${result?.mutationId ?? "unknown"}`);
 }
 
-const deadline = Date.now() + 120_000;
+const readinessTimeoutMs = 300_000;
+const deadline = Date.now() + readinessTimeoutMs;
 while (Date.now() < deadline) {
   current = await list();
   const complete = indexes.every(([name, type]) => current.get(name) === type);
   if (complete) {
     const evidence = {
       metadataIndexes: indexes.map(([propertyName, indexType]) => ({ propertyName, indexType })),
+      readinessTimeoutMs,
     };
     if (process.env.TMG_ACCEPT_METADATA_OUT) {
       const fs = await import("node:fs");
@@ -98,5 +100,5 @@ while (Date.now() < deadline) {
 }
 
 throw new Error(
-  `metadata indexes did not become ready: ${JSON.stringify([...current.entries()])}`,
+  `metadata indexes did not become ready within ${readinessTimeoutMs}ms: ${JSON.stringify([...current.entries()])}`,
 );
