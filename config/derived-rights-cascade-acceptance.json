@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0.0",
+  "state": "development_cascade_verified",
+  "authority": "development_cascade_only",
+  "evidence": {
+    "repository": "Tolani-Corp/TMG-video-services",
+    "acceptancePr": 11,
+    "headSha": "88c7cfa23c60cbe549d0f252dbe8815ec782a27b",
+    "mergeCommitSha": "45269255ceb4d1d42bb7ea4056cd4611ce97a6e7",
+    "workflowRunId": 32502061624,
+    "artifactId": 9454136044,
+    "artifactName": "tmg-derived-rights-cascade-acceptance-32502061624",
+    "artifactDigest": "sha256:4aad5e7e2a8bcda593c33e5f57af42e65c14be8c0c96e79454deb497b3b06ed0",
+    "acceptedAt": "2026-08-21T16:24:59.787Z"
+  },
+  "plan": {
+    "planId": "tsp_4647e174e110bdb71a34ba6925e5c79141da9e92",
+    "parentAssetId": "harmless_temporal_parent_001",
+    "parentSha256": "953f70eee561caeaa321e02cfa49f5f43807934c7f26c9243333a0979ccc9705",
+    "materializedRightsRevision": 1,
+    "changedRightsRevision": 2
+  },
+  "proof": {
+    "childCount": 3,
+    "revokedChildRights": 3,
+    "deletedShadowVectors": 3,
+    "postDeleteVectorCount": 0,
+    "preservedChildMedia": 3,
+    "preservedLineageRecords": 3,
+    "deleteMutationIds": [
+      "31eaec32-0f4a-4a72-8f4f-729b003461fe",
+      "1d514ad8-2879-46b3-b622-9ab618acb2ed",
+      "78d379a0-d4b4-49cc-b9aa-ea89ebc477f5"
+    ]
+  },
+  "promotion": {
+    "authoritativeRoutingAllowed": false,
+    "publicApiAllowed": false,
+    "mcpAllowed": false,
+    "commercialUseAllowed": false,
+    "automaticCascadeAllowed": false,
+    "requiresExplicitReleaseApproval": true
+  }
+}
