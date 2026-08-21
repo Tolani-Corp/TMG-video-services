@@ -1,0 +1,178 @@
+name: Marengo Development Shadow Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Shadow action to perform
+        required: true
+        type: choice
+        options:
+          - evaluate
+          - revoke
+      tenant_id:
+        description: Canonical tenant identifier
+        required: true
+        type: string
+      asset_id:
+        description: Canonical asset identifier
+        required: true
+        type: string
+      rights_profile_id:
+        description: Canonical rights profile identifier
+        required: true
+        type: string
+      rights_revision:
+        description: Canonical rights revision number
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmg-marengo-shadow-eval-${{ inputs.tenant_id }}-${{ inputs.asset_id }}
+  cancel-in-progress: false
+
+jobs:
+  shadow-evaluation:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY || secrets.TWELVELABS_KEY || secrets.TWELVE_LABS_API_KEY || secrets.TWELVELABS_API || secrets.TWELVELABS }}
+      TMG_MEDIA_BUCKET: tmg-video-assets-dev
+      TMG_MARENGO_SHADOW_INDEX: tmg-marengo-shadow-eval-512-dev
+      TMG_ACCEPT_METADATA_OUT: marengo-shadow-metadata-indexes.json
+      TMG_PROVIDER_ACCEPTANCE_REGISTRY_PATH: config/provider-acceptance-registry.json
+      TMG_SHADOW_ACTION: ${{ inputs.action }}
+      TMG_SHADOW_TENANT_ID: ${{ inputs.tenant_id }}
+      TMG_SHADOW_ASSET_ID: ${{ inputs.asset_id }}
+      TMG_SHADOW_RIGHTS_PROFILE_ID: ${{ inputs.rights_profile_id }}
+      TMG_SHADOW_RIGHTS_REVISION: ${{ inputs.rights_revision }}
+      TMG_SHADOW_MANIFEST_PATH: /tmp/tmg-shadow-manifest.json
+      TMG_SHADOW_RIGHTS_PATH: /tmp/tmg-shadow-rights.json
+      TMG_SHADOW_MEDIA_PATH: /tmp/tmg-shadow-media.mp4
+      TMG_SHADOW_RECEIPT_PATH: /tmp/tmg-shadow-receipt.json
+      TMG_SHADOW_EVENT_PATH: /tmp/tmg-shadow-event.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Validate development credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          if [ "${{ inputs.action }}" = "evaluate" ]; then
+            test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TWELVELABS_API_KEY"; exit 2; }
+          fi
+
+      - name: Validate repository control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+
+      - name: Ensure isolated Marengo shadow Vectorize index
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ensure-shadow-vector-index.mjs
+          node scripts/ensure-metadata-indexes.mjs
+
+      - name: Read canonical manifest and rights evidence from private R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
+          pnpm exec wrangler r2 object get \
+            "${TMG_MEDIA_BUCKET}/${ROOT}/control/manifest-v1.json" \
+            --file "${TMG_SHADOW_MANIFEST_PATH}" --remote
+          pnpm exec wrangler r2 object get \
+            "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_SHADOW_RIGHTS_PROFILE_ID}/r${TMG_SHADOW_RIGHTS_REVISION}.json" \
+            --file "${TMG_SHADOW_RIGHTS_PATH}" --remote
+          node scripts/marengo-shadow-evaluate.mjs preflight
+
+      - name: Rehydrate and verify exact R2 media bytes
+        if: ${{ inputs.action == 'evaluate' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 object get \
+            "${TMG_MEDIA_BUCKET}/${TMG_SHADOW_MEDIA_OBJECT_KEY}" \
+            --file "${TMG_SHADOW_MEDIA_PATH}" --remote
+          actual_sha="$(sha256sum "${TMG_SHADOW_MEDIA_PATH}" | awk '{print $1}')"
+          actual_bytes="$(stat -c '%s' "${TMG_SHADOW_MEDIA_PATH}")"
+          test "${actual_sha}" = "${TMG_SHADOW_EXPECTED_SHA256}"
+          test "${actual_bytes}" = "${TMG_SHADOW_EXPECTED_BYTES}"
+
+      - name: Read existing shadow receipt for revocation
+        if: ${{ inputs.action == 'revoke' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
+          pnpm exec wrangler r2 object get \
+            "${TMG_MEDIA_BUCKET}/${ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" \
+            --file "${TMG_SHADOW_RECEIPT_PATH}" --remote
+
+      - name: Generate and index Marengo shadow embedding
+        if: ${{ inputs.action == 'evaluate' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/marengo-shadow-evaluate.mjs evaluate
+
+      - name: Revoke exact Marengo shadow vector
+        if: ${{ inputs.action == 'revoke' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/marengo-shadow-evaluate.mjs revoke
+
+      - name: Persist shadow evaluation evidence to private R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
+          RECEIPT_KEY="${ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json"
+          if [ "${{ inputs.action }}" = "evaluate" ]; then
+            EVENT_KEY="${ROOT}/events/shadow-evaluation/${GITHUB_RUN_ID}.json"
+          else
+            EVENT_KEY="${ROOT}/events/shadow-revocation/${GITHUB_RUN_ID}.json"
+          fi
+          pnpm exec wrangler r2 object put \
+            "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" \
+            --file "${TMG_SHADOW_RECEIPT_PATH}" \
+            --content-type application/json --remote
+          pnpm exec wrangler r2 object put \
+            "${TMG_MEDIA_BUCKET}/${EVENT_KEY}" \
+            --file "${TMG_SHADOW_EVENT_PATH}" \
+            --content-type application/json --remote
+
+      - name: Upload execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-marengo-shadow-evaluation-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            marengo-shadow-metadata-indexes.json
+            ${{ env.TMG_SHADOW_RECEIPT_PATH }}
+            ${{ env.TMG_SHADOW_EVENT_PATH }}
