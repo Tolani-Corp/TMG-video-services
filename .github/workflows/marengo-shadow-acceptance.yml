@@ -22,7 +22,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.head_ref == 'acceptance/marengo-shadow-egress-e2e' }}
     environment: development
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
@@ -32,7 +32,9 @@ jobs:
       TMG_MARENGO_ACCEPT_VECTOR_INDEX: tmg-marengo-accept-${{ github.run_id }}
       TMG_ACCEPT_VECTOR_INDEX: tmg-marengo-accept-${{ github.run_id }}
       TMG_ACCEPT_METADATA_OUT: marengo-metadata-indexes.json
-      TMG_MARENGO_ACCEPT_MEDIA_PATH: /tmp/tmg-marengo-shadow-fixture.mp4
+      TMG_MARENGO_GENERATED_MEDIA_PATH: /tmp/tmg-marengo-shadow-generated.mp4
+      TMG_MARENGO_ACCEPT_MEDIA_PATH: /tmp/tmg-marengo-shadow-rehydrated.mp4
+      TMG_MARENGO_RUNTIME_CONTROL_PATH: /tmp/tmg-marengo-shadow-control-runtime.json
       TMG_MARENGO_ACCEPT_STATE_OUT: marengo-shadow-state.json
       TMG_MARENGO_ACCEPT_VECTOR_OUT: marengo-vector.ndjson
       TMG_MARENGO_ACCEPT_EVIDENCE_OUT: marengo-shadow-acceptance.json
@@ -70,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
-          test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TwelveLabs credential. Expected one of: TWELVELABS_API_KEY, TWELVELABS_KEY, TWELVE_LABS_API_KEY, TWELVELABS_API, TWELVELABS"; exit 2; }
+          test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TwelveLabs credential"; exit 2; }
 
       - name: Install and validate repository
         shell: bash
@@ -83,15 +85,26 @@ jobs:
           pnpm fixture:verify
           pnpm marketing:check
 
-      - name: Verify Marengo fixture integrity
+      - name: Cleanup prior failed isolated Vectorize index
+        shell: bash
+        run: |
+          set +e
+          pnpm exec wrangler vectorize delete "tmg-marengo-accept-32450785587" --force >/tmp/stale-marengo-index-cleanup.log 2>&1
+          status=$?
+          if [ "${status}" -eq 0 ]; then
+            echo "Cleaned stale isolated Marengo acceptance index from run 32450785587."
+          else
+            echo "Prior isolated index was already absent or could not be resolved; continuing."
+          fi
+          exit 0
+
+      - name: Generate and bind Marengo-safe synthetic fixture
         shell: bash
         run: |
           set -euo pipefail
-          actual_bytes="$(stat -c '%s' fixtures/marengo-shadow/marengo-shadow-fixture.mp4)"
-          actual_sha="$(sha256sum fixtures/marengo-shadow/marengo-shadow-fixture.mp4 | awk '{print $1}')"
-          echo "marengo fixture actual bytes=${actual_bytes} sha256=${actual_sha}"
-          test "${actual_bytes}" = "10808"
-          test "${actual_sha}" = "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02"
+          command -v ffmpeg >/dev/null
+          command -v ffprobe >/dev/null
+          node scripts/generate-marengo-shadow-fixture.mjs
 
       - name: Provision isolated R2 and Marengo Vectorize resources
         shell: bash
@@ -99,20 +112,21 @@ jobs:
           set -euo pipefail
           pnpm exec wrangler r2 bucket create "${TMG_MARENGO_ACCEPT_R2_BUCKET}"
           pnpm exec wrangler vectorize create "${TMG_MARENGO_ACCEPT_VECTOR_INDEX}" --dimensions 512 --metric cosine
+          echo "TMG_MARENGO_INDEX_CREATED=true" >> "${GITHUB_ENV}"
           node scripts/ensure-metadata-indexes.mjs
 
-      - name: Store canonical fixture evidence in private R2
+      - name: Store runtime-bound fixture evidence in private R2
         shell: bash
         run: |
           set -euo pipefail
           ROOT="tenants/tmg_fixture/assets/harmless_marengo_shadow_fixture_001"
           pnpm exec wrangler r2 object put \
             "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
-            --file fixtures/marengo-shadow/marengo-shadow-fixture.mp4 \
+            --file "${TMG_MARENGO_GENERATED_MEDIA_PATH}" \
             --content-type video/mp4 --remote
           pnpm exec wrangler r2 object put \
             "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/control/manifest-v1.json" \
-            --file fixtures/marengo-shadow/control.json \
+            --file "${TMG_MARENGO_RUNTIME_CONTROL_PATH}" \
             --content-type application/json --remote
 
       - name: Rehydrate exact R2 bytes for controlled provider egress
@@ -120,10 +134,14 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="tenants/tmg_fixture/assets/harmless_marengo_shadow_fixture_001"
+          rm -f "${TMG_MARENGO_ACCEPT_MEDIA_PATH}"
           pnpm exec wrangler r2 object get \
             "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
             --file "${TMG_MARENGO_ACCEPT_MEDIA_PATH}" --remote
-          echo "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02  ${TMG_MARENGO_ACCEPT_MEDIA_PATH}" | sha256sum --check --strict
+          actual_sha="$(sha256sum "${TMG_MARENGO_ACCEPT_MEDIA_PATH}" | awk '{print $1}')"
+          actual_bytes="$(stat -c '%s' "${TMG_MARENGO_ACCEPT_MEDIA_PATH}")"
+          test "${actual_sha}" = "${TMG_MARENGO_FIXTURE_SHA256}"
+          test "${actual_bytes}" = "${TMG_MARENGO_FIXTURE_BYTES}"
 
       - name: Upload provider asset and create Marengo fused embedding
         shell: bash
@@ -153,12 +171,25 @@ jobs:
           pnpm exec wrangler r2 object get \
             "${TMG_MARENGO_ACCEPT_R2_BUCKET}/${ROOT}/media/original.mp4" \
             --file /tmp/tmg-marengo-shadow-preserved.mp4 --remote
-          echo "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02  /tmp/tmg-marengo-shadow-preserved.mp4" | sha256sum --check --strict
-          node -e 'const fs=require("fs");const p="marengo-shadow-acceptance.json";const e=JSON.parse(fs.readFileSync(p,"utf8"));e.r2={bucket:process.env.TMG_MARENGO_ACCEPT_R2_BUCKET,mediaPreserved:true,sha256:"b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02"};fs.writeFileSync(p,JSON.stringify(e,null,2)+"\n")'
+          actual_sha="$(sha256sum /tmp/tmg-marengo-shadow-preserved.mp4 | awk '{print $1}')"
+          test "${actual_sha}" = "${TMG_MARENGO_FIXTURE_SHA256}"
+          node -e 'const fs=require("fs");const p="marengo-shadow-acceptance.json";const e=JSON.parse(fs.readFileSync(p,"utf8"));e.r2={bucket:process.env.TMG_MARENGO_ACCEPT_R2_BUCKET,mediaPreserved:true,sha256:process.env.TMG_MARENGO_FIXTURE_SHA256};fs.writeFileSync(p,JSON.stringify(e,null,2)+"\n")'
 
-      - name: Delete isolated Marengo acceptance Vectorize index
+      - name: Cleanup TwelveLabs asset
+        if: always()
         shell: bash
         run: |
+          set +e
+          node scripts/marengo-shadow-acceptance.mjs cleanup
+
+      - name: Cleanup isolated Marengo acceptance Vectorize index
+        if: always()
+        shell: bash
+        run: |
+          if [ "${TMG_MARENGO_INDEX_CREATED:-false}" != "true" ]; then
+            echo "No isolated Marengo index was created in this run."
+            exit 0
+          fi
           set -euo pipefail
           pnpm exec wrangler vectorize delete "${TMG_MARENGO_ACCEPT_VECTOR_INDEX}" --force
 
@@ -174,13 +205,7 @@ jobs:
             marengo-vector.ndjson
             marengo-vector-insert.json
             marengo-shadow-acceptance.json
-
-      - name: Cleanup TwelveLabs asset on partial failure
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          node scripts/marengo-shadow-acceptance.mjs cleanup
+            ${{ env.TMG_MARENGO_RUNTIME_CONTROL_PATH }}
 
       - name: Mark Marengo acceptance success
         if: success()

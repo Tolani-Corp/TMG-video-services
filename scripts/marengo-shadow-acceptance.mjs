@@ -1,11 +1,8 @@
-import fs from "node:fs";
 import crypto from "node:crypto";
+import fs from "node:fs";
 
 const TWELVELABS_BASE = "https://api.twelvelabs.io/v1.3";
-const EXPECTED_SHA256 = "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02";
-const EXPECTED_BYTES = 10808;
 const EXPECTED_DIMENSIONS = 512;
-const EXPECTED_DURATION_SECONDS = 4.2;
 const TENANT_ID = "tmg_fixture";
 const ASSET_ID = "harmless_marengo_shadow_fixture_001";
 const RIGHTS_PROFILE_ID = "harmless_marengo_shadow_rights_v1";
@@ -13,13 +10,27 @@ const EMBEDDING_PROFILE_ID = "twelvelabs_marengo3_fused_512_v1";
 const COMPATIBILITY_GROUP = "marengo3_fused_512_v1";
 const STATE_PATH = process.env.TMG_MARENGO_ACCEPT_STATE_OUT ?? "marengo-shadow-state.json";
 const VECTOR_PATH = process.env.TMG_MARENGO_ACCEPT_VECTOR_OUT ?? "marengo-vector.ndjson";
-const EVIDENCE_PATH = process.env.TMG_MARENGO_ACCEPT_EVIDENCE_OUT ?? "marengo-shadow-acceptance.json";
-const MEDIA_PATH = process.env.TMG_MARENGO_ACCEPT_MEDIA_PATH ?? "/tmp/tmg-marengo-shadow-fixture.mp4";
+const EVIDENCE_PATH =
+  process.env.TMG_MARENGO_ACCEPT_EVIDENCE_OUT ?? "marengo-shadow-acceptance.json";
+const MEDIA_PATH =
+  process.env.TMG_MARENGO_ACCEPT_MEDIA_PATH ?? "/tmp/tmg-marengo-shadow-rehydrated.mp4";
 
 function required(name) {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable ${name}`);
   return value;
+}
+
+function fixtureEvidence() {
+  const sha256 = required("TMG_MARENGO_FIXTURE_SHA256");
+  const bytes = Number(required("TMG_MARENGO_FIXTURE_BYTES"));
+  const durationSeconds = Number(required("TMG_MARENGO_FIXTURE_DURATION_SECONDS"));
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("Invalid Marengo fixture SHA-256 evidence.");
+  if (!Number.isInteger(bytes) || bytes <= 0) throw new Error("Invalid Marengo fixture byte evidence.");
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 4 || durationSeconds > 30) {
+    throw new Error("Invalid Marengo fixture duration evidence.");
+  }
+  return { sha256, bytes, durationSeconds };
 }
 
 function sha256(buffer) {
@@ -93,13 +104,16 @@ async function cloudflare(path, init = {}) {
 }
 
 function verifyFixture() {
+  const expected = fixtureEvidence();
   const media = fs.readFileSync(MEDIA_PATH);
   const digest = sha256(media);
-  if (digest !== EXPECTED_SHA256) {
-    throw new Error(`Marengo fixture SHA mismatch: expected ${EXPECTED_SHA256}, got ${digest}`);
+  if (digest !== expected.sha256) {
+    throw new Error(`Marengo fixture SHA mismatch: expected ${expected.sha256}, got ${digest}`);
   }
-  if (media.byteLength !== EXPECTED_BYTES) {
-    throw new Error(`Marengo fixture byte count mismatch: expected ${EXPECTED_BYTES}, got ${media.byteLength}`);
+  if (media.byteLength !== expected.bytes) {
+    throw new Error(
+      `Marengo fixture byte count mismatch: expected ${expected.bytes}, got ${media.byteLength}`,
+    );
   }
   return media;
 }
@@ -123,8 +137,48 @@ async function createAsset(media) {
 
   const { body } = await twelveLabs("/assets", { method: "POST", body: form });
   const id = body?._id;
-  if (typeof id !== "string" || !id) throw new Error("TwelveLabs asset creation did not return an asset ID");
+  if (typeof id !== "string" || !id) {
+    throw new Error("TwelveLabs asset creation did not return an asset ID");
+  }
   return id;
+}
+
+function safeTechnicalMetadata(body) {
+  const metadata = body?.technical_metadata;
+  if (!metadata || typeof metadata !== "object") return null;
+  const allowed = [
+    "file_size_bytes",
+    "file_mime_type",
+    "file_container_format",
+    "video_codec",
+    "video_width",
+    "video_height",
+    "video_fps",
+    "video_duration_seconds",
+    "audio_codec",
+    "audio_sample_rate",
+    "audio_channels",
+  ];
+  return Object.fromEntries(allowed.filter((key) => key in metadata).map((key) => [key, metadata[key]]));
+}
+
+function recordProviderFailure(assetId, body) {
+  let state = {};
+  if (fs.existsSync(STATE_PATH)) state = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+  const message =
+    typeof body?.error?.message === "string" ? body.error.message : "unspecified provider validation failure";
+  const next = {
+    ...state,
+    providerAssetId: assetId,
+    providerAssetStatus: "failed",
+    providerFailure: {
+      message,
+      technicalMetadata: safeTechnicalMetadata(body),
+      capturedAt: new Date().toISOString(),
+    },
+  };
+  fs.writeFileSync(STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  return message;
 }
 
 async function waitForAsset(assetId) {
@@ -134,7 +188,10 @@ async function waitForAsset(assetId) {
     const { body } = await twelveLabs(`/assets/${encodeURIComponent(assetId)}`);
     lastStatus = body?.status ?? "unknown";
     if (lastStatus === "ready") return body;
-    if (lastStatus === "failed") throw new Error("TwelveLabs asset processing failed");
+    if (lastStatus === "failed") {
+      const message = recordProviderFailure(assetId, body);
+      throw new Error(`TwelveLabs asset processing failed: ${message}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   throw new Error(`TwelveLabs asset did not become ready; last status=${lastStatus}`);
@@ -149,8 +206,6 @@ async function createEmbedding(assetId) {
       model_name: "marengo3.0",
       video: {
         media_source: { asset_id: assetId },
-        start_sec: 0,
-        end_sec: EXPECTED_DURATION_SECONDS,
         embedding_option: ["visual", "audio", "transcription"],
         embedding_scope: ["asset"],
         embedding_type: ["fused_embedding"],
@@ -158,7 +213,9 @@ async function createEmbedding(assetId) {
     }),
   });
 
-  if (!Array.isArray(body?.data)) throw new Error("TwelveLabs Embed API v2 did not return a data array");
+  if (!Array.isArray(body?.data)) {
+    throw new Error("TwelveLabs Embed API v2 did not return a data array");
+  }
   const fused = body.data.filter(
     (item) => item?.embedding_option === "fused" && item?.embedding_scope === "asset",
   );
@@ -176,6 +233,7 @@ async function createEmbedding(assetId) {
 }
 
 function writeVector(values) {
+  const fixture = fixtureEvidence();
   const id = vectorId();
   const record = {
     id,
@@ -197,7 +255,7 @@ function writeVector(values) {
       compatibilityGroup: COMPATIBILITY_GROUP,
       providerId: "twelvelabs-marengo3",
       providerModel: "marengo3.0",
-      fixtureSha256: EXPECTED_SHA256,
+      fixtureSha256: fixture.sha256,
     },
   };
   fs.writeFileSync(VECTOR_PATH, `${JSON.stringify(record)}\n`);
@@ -237,13 +295,23 @@ async function deleteVector(id) {
 }
 
 async function deleteAsset(assetId) {
-  const result = await twelveLabs(`/assets/${encodeURIComponent(assetId)}?force=true`, { method: "DELETE" });
-  if (result.response.status !== 204) throw new Error("TwelveLabs asset delete did not return 204");
+  const result = await twelveLabs(`/assets/${encodeURIComponent(assetId)}?force=true`, {
+    method: "DELETE",
+  });
+  if (result.response.status !== 204) {
+    throw new Error("TwelveLabs asset delete did not return 204");
+  }
 }
 
 async function verifyAssetDeleted(assetId) {
-  const { response } = await twelveLabs(`/assets/${encodeURIComponent(assetId)}`, {}, { allowNotFound: true });
-  if (response.status !== 404) throw new Error(`Expected deleted TwelveLabs asset to return 404; got ${response.status}`);
+  const { response } = await twelveLabs(
+    `/assets/${encodeURIComponent(assetId)}`,
+    {},
+    { allowNotFound: true },
+  );
+  if (response.status !== 404) {
+    throw new Error(`Expected deleted TwelveLabs asset to return 404; got ${response.status}`);
+  }
 }
 
 async function prepare() {
@@ -255,41 +323,51 @@ async function prepare() {
   const assetId = await createAsset(media);
   fs.writeFileSync(
     STATE_PATH,
-    JSON.stringify({ providerAssetId: assetId, providerAssetDeleted: false, createdAt: new Date().toISOString() }, null, 2) + "\n",
+    `${JSON.stringify(
+      { providerAssetId: assetId, providerAssetDeleted: false, createdAt: new Date().toISOString() },
+      null,
+      2,
+    )}\n`,
   );
   const asset = await waitForAsset(assetId);
   const vector = await createEmbedding(assetId);
   const record = writeVector(vector);
   fs.writeFileSync(
     STATE_PATH,
-    JSON.stringify(
+    `${JSON.stringify(
       {
         providerAssetId: assetId,
         providerAssetDeleted: false,
         providerAssetStatus: asset?.status,
+        providerTechnicalMetadata: safeTechnicalMetadata(asset),
         vectorId: record.id,
         dimensions: vector.length,
         createdAt: new Date().toISOString(),
       },
       null,
       2,
-    ) + "\n",
+    )}\n`,
   );
   console.log(`Marengo shadow embedding prepared: dimensions=${vector.length} vectorId=${record.id}`);
 }
 
 async function verifyAndRevoke() {
+  const fixture = fixtureEvidence();
   const state = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
   const record = JSON.parse(fs.readFileSync(VECTOR_PATH, "utf8").trim());
   const postInsert = await queryUntil(1, record.values);
   const match = postInsert?.matches?.[0];
-  if (!match || match.id !== record.id) throw new Error("Internal Marengo retrieval did not return the expected vector ID");
+  if (!match || match.id !== record.id) {
+    throw new Error("Internal Marengo retrieval did not return the expected vector ID");
+  }
   const metadata = match.metadata ?? {};
   if (metadata.publicationState !== "review" || metadata.rightsVerified !== true) {
     throw new Error("Retrieved Marengo vector is not review-only with verified fixture rights");
   }
   for (const grant of ["externalApi", "mcp", "advertising", "datasetExport", "licensing"]) {
-    if (metadata[grant] !== false) throw new Error(`Retrieved Marengo vector unexpectedly grants ${grant}`);
+    if (metadata[grant] !== false) {
+      throw new Error(`Retrieved Marengo vector unexpectedly grants ${grant}`);
+    }
   }
 
   const deleteMutationId = await deleteVector(record.id);
@@ -304,9 +382,9 @@ async function verifyAndRevoke() {
     tenantId: TENANT_ID,
     assetId: ASSET_ID,
     fixture: {
-      sha256: EXPECTED_SHA256,
-      bytes: EXPECTED_BYTES,
-      durationSeconds: EXPECTED_DURATION_SECONDS,
+      sha256: fixture.sha256,
+      bytes: fixture.bytes,
+      durationSeconds: fixture.durationSeconds,
       publicationState: "review",
       rightsProfileId: RIGHTS_PROFILE_ID,
       grants: {
@@ -324,6 +402,7 @@ async function verifyAndRevoke() {
       assetCreated: true,
       assetReady: true,
       assetDeleted: true,
+      technicalMetadata: state.providerTechnicalMetadata ?? null,
       dimensions: EXPECTED_DIMENSIONS,
       compatibilityGroup: COMPATIBILITY_GROUP,
     },
@@ -336,10 +415,14 @@ async function verifyAndRevoke() {
     },
     completedAt: new Date().toISOString(),
   };
-  fs.writeFileSync(EVIDENCE_PATH, JSON.stringify(evidence, null, 2) + "\n");
+  fs.writeFileSync(EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)}\n`);
   fs.writeFileSync(
     STATE_PATH,
-    JSON.stringify({ ...state, providerAssetDeleted: true, deleteMutationId, completedAt: evidence.completedAt }, null, 2) + "\n",
+    `${JSON.stringify(
+      { ...state, providerAssetDeleted: true, deleteMutationId, completedAt: evidence.completedAt },
+      null,
+      2,
+    )}\n`,
   );
   console.log(JSON.stringify(evidence));
 }
@@ -352,7 +435,7 @@ async function cleanup() {
     await deleteAsset(state.providerAssetId);
     state.providerAssetDeleted = true;
     state.cleanupAt = new Date().toISOString();
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + "\n");
+    fs.writeFileSync(STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
     console.log("Cleaned up TwelveLabs shadow asset.");
   } catch (error) {
     console.error(`Provider cleanup failed: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -364,4 +447,8 @@ const command = process.argv[2];
 if (command === "prepare") await prepare();
 else if (command === "verify-revoke") await verifyAndRevoke();
 else if (command === "cleanup") await cleanup();
-else throw new Error("Usage: node scripts/marengo-shadow-acceptance.mjs <prepare|verify-revoke|cleanup>");
+else {
+  throw new Error(
+    "Usage: node scripts/marengo-shadow-acceptance.mjs <prepare|verify-revoke|cleanup>",
+  );
+}

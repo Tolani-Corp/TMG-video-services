@@ -5,15 +5,12 @@
   "purpose": "development_shadow_egress_acceptance",
   "publicationState": "review",
   "media": {
-    "path": "fixtures/marengo-shadow/marengo-shadow-fixture.mp4",
-    "sha256": "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02",
-    "bytes": 10808,
-    "durationMs": 4200,
-    "width": 360,
-    "height": 360,
-    "videoCodec": "h264",
-    "audioCodec": "aac",
-    "description": "Generated black-frame video with a synthetic 440 Hz tone; contains no user, creator, or third-party media."
+    "integrityMode": "runtime_bound",
+    "generationRecipe": {
+      "durationSeconds": 5,
+      "video": "synthetic black frame, 360x360, 25fps, H.264 main, yuv420p",
+      "audio": "synthetic 440 Hz tone, AAC mono, 48 kHz"
+    }
   },
   "rights": {
     "rightsProfileId": "harmless_marengo_shadow_rights_v1",
