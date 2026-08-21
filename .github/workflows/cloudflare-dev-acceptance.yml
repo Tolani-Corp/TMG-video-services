@@ -20,7 +20,7 @@ concurrency:
 jobs:
   acceptance:
     if: ${{ github.event_name != 'pull_request' || github.head_ref == 'acceptance/dev-infra-revocation-e2e' }}
-    environment: Production
+    environment: development
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
