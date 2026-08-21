@@ -109,6 +109,27 @@ for (const provider of providers.providers ?? []) {
   }
 }
 
+const marengoProvider = (providers.providers ?? []).find(
+  (provider) => provider.id === "twelvelabs-marengo3",
+);
+if (
+  !marengoProvider ||
+  marengoProvider.status !== "shadow" ||
+  marengoProvider.egressClass !== "external" ||
+  marengoProvider.acceptanceRequirement !== "development_acceptance"
+) {
+  failures.push("Marengo 3.0 must remain shadow-only, external-egress, and development-acceptance gated at G0");
+}
+if (marengoProvider?.profile?.compatibilityGroup === fixtureProvider?.profile?.compatibilityGroup) {
+  failures.push("Marengo and deterministic fixture embeddings must never share a compatibility group");
+}
+const marengoGroup = (providers.compatibilityGroups ?? []).find(
+  (group) => group.id === marengoProvider?.profile?.compatibilityGroup,
+);
+if (!marengoGroup || marengoGroup.vectorIndexBinding === "VIDEO_INDEX") {
+  failures.push("Marengo must use a reserved, isolated Vectorize binding rather than the fixture VIDEO_INDEX");
+}
+
 if (fixture.manifest?.source?.sourceClass !== "fixture") {
   failures.push("harmless fixture must remain sourceClass=fixture");
 }
