@@ -85,19 +85,6 @@ jobs:
           pnpm fixture:verify
           pnpm marketing:check
 
-      - name: Cleanup prior failed isolated Vectorize index
-        shell: bash
-        run: |
-          set +e
-          pnpm exec wrangler vectorize delete "tmg-marengo-accept-32450785587" --force >/tmp/stale-marengo-index-cleanup.log 2>&1
-          status=$?
-          if [ "${status}" -eq 0 ]; then
-            echo "Cleaned stale isolated Marengo acceptance index from run 32450785587."
-          else
-            echo "Prior isolated index was already absent or could not be resolved; continuing."
-          fi
-          exit 0
-
       - name: Generate and bind Marengo-safe synthetic fixture
         shell: bash
         run: |
