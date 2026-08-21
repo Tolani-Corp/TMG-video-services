@@ -1,0 +1,201 @@
+name: Governed Temporal Segment Materialization
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Canonical tenant identifier
+        required: true
+        type: string
+      asset_id:
+        description: Parent canonical asset identifier
+        required: true
+        type: string
+      rights_profile_id:
+        description: Parent canonical rights profile identifier
+        required: true
+        type: string
+      rights_revision:
+        description: Current parent rights revision number
+        required: true
+        type: number
+      segments_json:
+        description: JSON array of {segmentId,startMs,endMs}; 1-64 non-overlapping 4-30s windows
+        required: true
+        type: string
+      run_shadow_evaluation:
+        description: Evaluate each derived segment with Marengo after materialization
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmg-temporal-segments-${{ inputs.tenant_id }}-${{ inputs.asset_id }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY || secrets.TWELVELABS_KEY || secrets.TWELVE_LABS_API_KEY || secrets.TWELVELABS_API || secrets.TWELVELABS }}
+      TMG_MEDIA_BUCKET: tmg-video-assets-dev
+      TMG_MARENGO_SHADOW_INDEX: tmg-marengo-shadow-eval-512-dev
+      TMG_ACCEPT_VECTOR_INDEX: tmg-marengo-shadow-eval-512-dev
+      TMG_ACCEPT_METADATA_OUT: temporal-segment-marengo-metadata-indexes.json
+      TMG_PROVIDER_ACCEPTANCE_REGISTRY_PATH: config/provider-acceptance-registry.json
+      TMG_SEGMENT_TENANT_ID: ${{ inputs.tenant_id }}
+      TMG_SEGMENT_PARENT_ASSET_ID: ${{ inputs.asset_id }}
+      TMG_SEGMENT_RIGHTS_PROFILE_ID: ${{ inputs.rights_profile_id }}
+      TMG_SEGMENT_RIGHTS_REVISION: ${{ inputs.rights_revision }}
+      TMG_SEGMENT_PLAN_JSON: ${{ inputs.segments_json }}
+      TMG_SEGMENT_PARENT_MANIFEST_PATH: /tmp/tmg-segment-parent-manifest.json
+      TMG_SEGMENT_PARENT_RIGHTS_PATH: /tmp/tmg-segment-parent-rights.json
+      TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH: /tmp/tmg-segment-parent-current-rights.json
+      TMG_SEGMENT_SOURCE_MEDIA_PATH: /tmp/tmg-segment-parent-media
+      TMG_SEGMENT_OUTPUT_DIR: /tmp/tmg-temporal-segments
+      TMG_SEGMENT_INDEX_PATH: /tmp/tmg-temporal-segments/index.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Validate development credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          if [ "${{ inputs.run_shadow_evaluation }}" = "true" ]; then
+            test -n "${TWELVELABS_API_KEY:-}" || { echo "::error::Missing TWELVELABS_API_KEY"; exit 2; }
+          fi
+
+      - name: Install repository and FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffmpeg -version | head -n 1
+
+      - name: Read parent canonical control and current rights from private R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/${TMG_SEGMENT_TENANT_ID}/assets/${TMG_SEGMENT_PARENT_ASSET_ID}"
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/manifest-v1.json" --file "${TMG_SEGMENT_PARENT_MANIFEST_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_SEGMENT_RIGHTS_PROFILE_ID}/r${TMG_SEGMENT_RIGHTS_REVISION}.json" --file "${TMG_SEGMENT_PARENT_RIGHTS_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_SEGMENT_RIGHTS_PROFILE_ID}/current.json" --file "${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" --remote
+          node scripts/materialize-temporal-segments.mjs preflight
+
+      - name: Rehydrate and verify exact parent media bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${TMG_SEGMENT_SOURCE_OBJECT_KEY}" --file "${TMG_SEGMENT_SOURCE_MEDIA_PATH}" --remote
+          actual_sha="$(sha256sum "${TMG_SEGMENT_SOURCE_MEDIA_PATH}" | awk '{print $1}')"
+          actual_bytes="$(stat -c '%s' "${TMG_SEGMENT_SOURCE_MEDIA_PATH}")"
+          test "${actual_sha}" = "${TMG_SEGMENT_SOURCE_SHA256}"
+          test "${actual_bytes}" = "${TMG_SEGMENT_SOURCE_BYTES}"
+
+      - name: Materialize governed temporal child assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/materialize-temporal-segments.mjs materialize
+
+      - name: Persist derived media and immutable control lineage to private R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/tmg-segment-upload.tsv
+          const fs = require('fs');
+          const index = JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH, 'utf8'));
+          for (const c of index.children) {
+            console.log([c.mediaObjectKey,c.manifestKey,c.rightsKey,c.currentRightsKey,c.derivationKey,c.files.media,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation].join('\t'));
+          }
+          NODE
+          while IFS=$'\t' read -r MEDIA_KEY MANIFEST_KEY RIGHTS_KEY CURRENT_KEY DERIVATION_KEY MEDIA_FILE MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE; do
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${MEDIA_KEY}" --file "${MEDIA_FILE}" --content-type video/mp4 --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${MANIFEST_KEY}" --file "${MANIFEST_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${RIGHTS_KEY}" --file "${RIGHTS_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CURRENT_KEY}" --file "${CURRENT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${DERIVATION_KEY}" --file "${DERIVATION_FILE}" --content-type application/json --remote
+          done < /tmp/tmg-segment-upload.tsv
+          PLAN_ID="$(node -e 'const i=require(process.env.TMG_SEGMENT_INDEX_PATH);process.stdout.write(i.planId)')"
+          PARENT_ROOT="tenants/${TMG_SEGMENT_TENANT_ID}/assets/${TMG_SEGMENT_PARENT_ASSET_ID}"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${PARENT_ROOT}/control/temporal-segments/${PLAN_ID}.json" --file "${TMG_SEGMENT_INDEX_PATH}" --content-type application/json --remote
+
+      - name: Ensure Marengo shadow index for optional evaluation
+        if: ${{ inputs.run_shadow_evaluation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ensure-shadow-vector-index.mjs
+          node scripts/ensure-metadata-indexes.mjs
+
+      - name: Evaluate derived segments through development-shadow Marengo
+        if: ${{ inputs.run_shadow_evaluation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/tmg-segment-eval.tsv
+          const fs = require('fs');
+          const index = JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH, 'utf8'));
+          for (const c of index.children) console.log([c.childAssetId,c.childRightsProfileId,c.childRoot,c.files.media,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation,c.files.receipt,c.files.event].join('\t'));
+          NODE
+          while IFS=$'\t' read -r CHILD_ASSET CHILD_RIGHTS CHILD_ROOT MEDIA_FILE MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE RECEIPT_FILE EVENT_FILE; do
+            export TMG_SHADOW_ACTION=evaluate
+            export TMG_SHADOW_TENANT_ID="${TMG_SEGMENT_TENANT_ID}"
+            export TMG_SHADOW_ASSET_ID="${CHILD_ASSET}"
+            export TMG_SHADOW_RIGHTS_PROFILE_ID="${CHILD_RIGHTS}"
+            export TMG_SHADOW_RIGHTS_REVISION=1
+            export TMG_SHADOW_MANIFEST_PATH="${MANIFEST_FILE}"
+            export TMG_SHADOW_RIGHTS_PATH="${RIGHTS_FILE}"
+            export TMG_SHADOW_CURRENT_RIGHTS_PATH="${CURRENT_FILE}"
+            export TMG_SHADOW_DERIVATION_PATH="${DERIVATION_FILE}"
+            export TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}"
+            export TMG_SHADOW_PARENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_RIGHTS_PATH}"
+            export TMG_SHADOW_MEDIA_PATH="${MEDIA_FILE}"
+            export TMG_SHADOW_RECEIPT_PATH="${RECEIPT_FILE}"
+            export TMG_SHADOW_EVENT_PATH="${EVENT_FILE}"
+            node scripts/validate-shadow-current-rights.mjs
+            node scripts/marengo-shadow-evaluate.mjs preflight
+            node scripts/marengo-shadow-evaluate.mjs evaluate
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" --file "${RECEIPT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/shadow-evaluation/${GITHUB_RUN_ID}.json" --file "${EVENT_FILE}" --content-type application/json --remote
+          done < /tmp/tmg-segment-eval.tsv
+
+      - name: Upload materialization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-temporal-segment-materialization-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.TMG_SEGMENT_INDEX_PATH }}
+            temporal-segment-marengo-metadata-indexes.json
+            /tmp/tmg-temporal-segments/*/manifest.json
+            /tmp/tmg-temporal-segments/*/rights.json
+            /tmp/tmg-temporal-segments/*/current-rights.json
+            /tmp/tmg-temporal-segments/*/derivation.json
+            /tmp/tmg-temporal-segments/*/shadow-receipt.json
+            /tmp/tmg-temporal-segments/*/shadow-event.json

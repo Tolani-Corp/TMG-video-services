@@ -12,7 +12,8 @@
     "test": "vitest run",
     "fixture:verify": "node scripts/verify-fixture.mjs",
     "provider-acceptance:check": "node scripts/provider-acceptance-check.mjs",
-    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs",
+    "temporal-segment-policy:check": "node scripts/temporal-segment-policy-check.mjs",
+    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs",
     "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
   },
   "dependencies": {
