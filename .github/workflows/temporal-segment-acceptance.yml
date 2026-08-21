@@ -1,0 +1,242 @@
+name: Temporal Segment Development Acceptance
+
+on:
+  pull_request:
+    branches:
+      - feat/governed-temporal-segment-materialization-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-temporal-segment-acceptance-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: ${{ github.event_name != 'pull_request' || github.head_ref == 'acceptance/temporal-segment-materialization-e2e' }}
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TWELVELABS_API_KEY: ${{ secrets.TWELVELABS_API_KEY || secrets.TWELVELABS_KEY || secrets.TWELVE_LABS_API_KEY || secrets.TWELVELABS_API || secrets.TWELVELABS }}
+      ACCEPTANCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TMG_MEDIA_BUCKET: tmg-temporal-accept-${{ github.run_id }}
+      TMG_MARENGO_SHADOW_INDEX: tmg-temporal-accept-${{ github.run_id }}
+      TMG_ACCEPT_VECTOR_INDEX: tmg-temporal-accept-${{ github.run_id }}
+      TMG_ACCEPT_METADATA_OUT: temporal-accept-metadata-indexes.json
+      TMG_PROVIDER_ACCEPTANCE_REGISTRY_PATH: config/provider-acceptance-registry.json
+      TMG_SEGMENT_TENANT_ID: tmg_fixture
+      TMG_SEGMENT_PARENT_ASSET_ID: harmless_temporal_parent_001
+      TMG_SEGMENT_RIGHTS_PROFILE_ID: harmless_temporal_parent_rights_v1
+      TMG_SEGMENT_RIGHTS_REVISION: 1
+      TMG_SEGMENT_PLAN_JSON: '[{"segmentId":"s000","startMs":0,"endMs":10000},{"segmentId":"s001","startMs":10000,"endMs":25000},{"segmentId":"s002","startMs":25000,"endMs":45000}]'
+      TMG_SEGMENT_PARENT_MANIFEST_PATH: /tmp/tmg-temporal-parent-manifest.json
+      TMG_SEGMENT_PARENT_RIGHTS_PATH: /tmp/tmg-temporal-parent-rights.json
+      TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH: /tmp/tmg-temporal-parent-current-rights.json
+      TMG_SEGMENT_SOURCE_MEDIA_PATH: /tmp/tmg-temporal-parent-rehydrated.mp4
+      TMG_SEGMENT_OUTPUT_DIR: /tmp/tmg-temporal-segments
+      TMG_SEGMENT_INDEX_PATH: /tmp/tmg-temporal-segments/index.json
+      TMG_TEMPORAL_ACCEPT_EVIDENCE_OUT: temporal-segment-acceptance.json
+      TMG_TEMPORAL_ACCEPT_PRESERVATION: /tmp/tmg-temporal-preservation.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACCEPTANCE_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Mark temporal acceptance pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" -d "{\"state\":\"pending\",\"context\":\"tmg-temporal-segment-acceptance\",\"description\":\"Temporal segment development acceptance is running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Validate development credentials and repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}"
+          test -n "${TWELVELABS_API_KEY:-}"
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Generate harmless 45-second parent and canonical control evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/temporal-segment-acceptance.mjs generate
+
+      - name: Create isolated private R2 bucket and seed parent evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket create "${TMG_MEDIA_BUCKET}"
+          ROOT="tenants/tmg_fixture/assets/harmless_temporal_parent_001"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/media/original.mp4" --file /tmp/tmg-temporal-parent.mp4 --content-type video/mp4 --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/manifest-v1.json" --file "${TMG_SEGMENT_PARENT_MANIFEST_PATH}" --content-type application/json --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/harmless_temporal_parent_rights_v1/r1.json" --file "${TMG_SEGMENT_PARENT_RIGHTS_PATH}" --content-type application/json --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/harmless_temporal_parent_rights_v1/current.json" --file "${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" --content-type application/json --remote
+
+      - name: Rehydrate exact parent from R2 and materialize three governed clips
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${TMG_SEGMENT_SOURCE_OBJECT_KEY}" --file "${TMG_SEGMENT_SOURCE_MEDIA_PATH}" --remote
+          test "$(sha256sum "${TMG_SEGMENT_SOURCE_MEDIA_PATH}" | awk '{print $1}')" = "${TMG_TEMPORAL_PARENT_SHA256}"
+          test "$(stat -c '%s' "${TMG_SEGMENT_SOURCE_MEDIA_PATH}")" = "${TMG_TEMPORAL_PARENT_BYTES}"
+          node scripts/materialize-temporal-segments.mjs preflight
+          node scripts/materialize-temporal-segments.mjs materialize
+          test "$(node -e 'const i=require(process.env.TMG_SEGMENT_INDEX_PATH);process.stdout.write(String(i.children.length))')" = "3"
+
+      - name: Persist derived clips and immutable lineage to R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/tmg-temporal-upload.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.mediaObjectKey,c.manifestKey,c.rightsKey,c.currentRightsKey,c.derivationKey,c.files.media,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation].join('\t'));
+          NODE
+          while IFS=$'\t' read -r MEDIA_KEY MANIFEST_KEY RIGHTS_KEY CURRENT_KEY DERIVATION_KEY MEDIA_FILE MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE; do
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${MEDIA_KEY}" --file "${MEDIA_FILE}" --content-type video/mp4 --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${MANIFEST_KEY}" --file "${MANIFEST_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${RIGHTS_KEY}" --file "${RIGHTS_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CURRENT_KEY}" --file "${CURRENT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${DERIVATION_KEY}" --file "${DERIVATION_FILE}" --content-type application/json --remote
+          done < /tmp/tmg-temporal-upload.tsv
+          PLAN_ID="$(node -e 'const i=require(process.env.TMG_SEGMENT_INDEX_PATH);process.stdout.write(i.planId)')"
+          ROOT="tenants/tmg_fixture/assets/harmless_temporal_parent_001"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/control/temporal-segments/${PLAN_ID}.json" --file "${TMG_SEGMENT_INDEX_PATH}" --content-type application/json --remote
+
+      - name: Create isolated Marengo Vectorize index and eight metadata indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ensure-shadow-vector-index.mjs
+          node scripts/ensure-metadata-indexes.mjs
+
+      - name: Evaluate all three derived clips through Marengo shadow path
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/tmg-temporal-eval.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.childAssetId,c.childRightsProfileId,c.childRoot,c.files.media,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation,c.files.receipt,c.files.event].join('\t'));
+          NODE
+          while IFS=$'\t' read -r CHILD_ASSET CHILD_RIGHTS CHILD_ROOT MEDIA_FILE MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE RECEIPT_FILE EVENT_FILE; do
+            export TMG_SHADOW_ACTION=evaluate TMG_SHADOW_TENANT_ID=tmg_fixture TMG_SHADOW_ASSET_ID="${CHILD_ASSET}" TMG_SHADOW_RIGHTS_PROFILE_ID="${CHILD_RIGHTS}" TMG_SHADOW_RIGHTS_REVISION=1
+            export TMG_SHADOW_MANIFEST_PATH="${MANIFEST_FILE}" TMG_SHADOW_RIGHTS_PATH="${RIGHTS_FILE}" TMG_SHADOW_CURRENT_RIGHTS_PATH="${CURRENT_FILE}" TMG_SHADOW_DERIVATION_PATH="${DERIVATION_FILE}"
+            export TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" TMG_SHADOW_PARENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_RIGHTS_PATH}" TMG_SHADOW_MEDIA_PATH="${MEDIA_FILE}" TMG_SHADOW_RECEIPT_PATH="${RECEIPT_FILE}" TMG_SHADOW_EVENT_PATH="${EVENT_FILE}"
+            node scripts/validate-shadow-current-rights.mjs
+            node scripts/marengo-shadow-evaluate.mjs preflight
+            node scripts/marengo-shadow-evaluate.mjs evaluate
+            cp "${RECEIPT_FILE}" "$(dirname "${RECEIPT_FILE}")/evaluation-receipt.json"
+            cp "${EVENT_FILE}" "$(dirname "${EVENT_FILE}")/evaluation-event.json"
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" --file "${RECEIPT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/shadow-evaluation/${GITHUB_RUN_ID}.json" --file "${EVENT_FILE}" --content-type application/json --remote
+          done < /tmp/tmg-temporal-eval.tsv
+          node scripts/temporal-segment-acceptance.mjs verify-evaluated
+
+      - name: Revoke all three exact shadow vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/tmg-temporal-revoke.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.childAssetId,c.childRightsProfileId,c.childRoot,c.files.manifest,c.files.rights,c.files.currentRights,c.files.derivation,c.files.receipt,c.files.event].join('\t'));
+          NODE
+          while IFS=$'\t' read -r CHILD_ASSET CHILD_RIGHTS CHILD_ROOT MANIFEST_FILE RIGHTS_FILE CURRENT_FILE DERIVATION_FILE RECEIPT_FILE EVENT_FILE; do
+            export TMG_SHADOW_ACTION=revoke TMG_SHADOW_TENANT_ID=tmg_fixture TMG_SHADOW_ASSET_ID="${CHILD_ASSET}" TMG_SHADOW_RIGHTS_PROFILE_ID="${CHILD_RIGHTS}" TMG_SHADOW_RIGHTS_REVISION=1
+            export TMG_SHADOW_MANIFEST_PATH="${MANIFEST_FILE}" TMG_SHADOW_RIGHTS_PATH="${RIGHTS_FILE}" TMG_SHADOW_CURRENT_RIGHTS_PATH="${CURRENT_FILE}" TMG_SHADOW_DERIVATION_PATH="${DERIVATION_FILE}"
+            export TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_CURRENT_RIGHTS_PATH}" TMG_SHADOW_PARENT_RIGHTS_PATH="${TMG_SEGMENT_PARENT_RIGHTS_PATH}" TMG_SHADOW_RECEIPT_PATH="${RECEIPT_FILE}" TMG_SHADOW_EVENT_PATH="${EVENT_FILE}"
+            node scripts/validate-shadow-current-rights.mjs
+            node scripts/marengo-shadow-evaluate.mjs preflight
+            node scripts/marengo-shadow-evaluate.mjs revoke
+            cp "${RECEIPT_FILE}" "$(dirname "${RECEIPT_FILE}")/revoked-receipt.json"
+            cp "${EVENT_FILE}" "$(dirname "${EVENT_FILE}")/revoked-event.json"
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" --file "${RECEIPT_FILE}" --content-type application/json --remote
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/shadow-revocation/${GITHUB_RUN_ID}.json" --file "${EVENT_FILE}" --content-type application/json --remote
+          done < /tmp/tmg-temporal-revoke.tsv
+
+      - name: Prove parent, child media, and lineage remain intact in R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tmg-preserved
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${TMG_SEGMENT_SOURCE_OBJECT_KEY}" --file /tmp/tmg-preserved/parent.mp4 --remote
+          test "$(sha256sum /tmp/tmg-preserved/parent.mp4 | awk '{print $1}')" = "${TMG_TEMPORAL_PARENT_SHA256}"
+          node - <<'NODE' > /tmp/tmg-preserve.tsv
+          const fs=require('fs');const i=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+          for(const c of i.children) console.log([c.childAssetId,c.mediaObjectKey,c.sourceSha256,c.derivationKey].join('\t'));
+          NODE
+          children=0; lineage=0
+          while IFS=$'\t' read -r CHILD MEDIA_KEY SHA DERIVATION_KEY; do
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${MEDIA_KEY}" --file "/tmp/tmg-preserved/${CHILD}.mp4" --remote
+            test "$(sha256sum "/tmp/tmg-preserved/${CHILD}.mp4" | awk '{print $1}')" = "${SHA}"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${DERIVATION_KEY}" --file "/tmp/tmg-preserved/${CHILD}-derivation.json" --remote
+            node -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(d.authority!=="development_materialization_only"||d.publicationAuthority!==false)process.exit(1)' "/tmp/tmg-preserved/${CHILD}-derivation.json"
+            children=$((children+1)); lineage=$((lineage+1))
+          done < /tmp/tmg-preserve.tsv
+          node -e 'const fs=require("fs");fs.writeFileSync(process.env.TMG_TEMPORAL_ACCEPT_PRESERVATION,JSON.stringify({bucket:process.env.TMG_MEDIA_BUCKET,parentMediaPreserved:true,childrenPreserved:Number(process.argv[1]),lineagePreserved:Number(process.argv[2])},null,2)+"\n")' "${children}" "${lineage}"
+          node scripts/temporal-segment-acceptance.mjs verify-revoked
+
+      - name: Upload temporal acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-temporal-segment-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            temporal-segment-acceptance.json
+            temporal-accept-metadata-indexes.json
+            ${{ env.TMG_SEGMENT_INDEX_PATH }}
+            ${{ env.TMG_TEMPORAL_ACCEPT_PRESERVATION }}
+            /tmp/tmg-temporal-segments/*/manifest.json
+            /tmp/tmg-temporal-segments/*/rights.json
+            /tmp/tmg-temporal-segments/*/current-rights.json
+            /tmp/tmg-temporal-segments/*/derivation.json
+            /tmp/tmg-temporal-segments/*/evaluation-event.json
+            /tmp/tmg-temporal-segments/*/revoked-receipt.json
+
+      - name: Cleanup isolated acceptance Vectorize index
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          pnpm exec wrangler vectorize delete "${TMG_MARENGO_SHADOW_INDEX}" --force
+          exit 0
+
+      - name: Mark temporal acceptance success
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail-with-body --silent --show-error -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" -d "{\"state\":\"success\",\"context\":\"tmg-temporal-segment-acceptance\",\"description\":\"3 clips → Marengo → revoke → R2 lineage preserved\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark temporal acceptance failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail-with-body --silent --show-error -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" -d "{\"state\":\"failure\",\"context\":\"tmg-temporal-segment-acceptance\",\"description\":\"Temporal segment acceptance failed; inspect evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
