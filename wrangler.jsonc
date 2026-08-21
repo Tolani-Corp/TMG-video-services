@@ -10,8 +10,11 @@
     "TMG_MCP_ENABLED": "false",
     "TMG_INGEST_WORKFLOW_ENABLED": "false",
     "TMG_INGESTION_MODE": "fixture_only",
-    "TMG_POLICY_VERSION": "2026-08-20.v2",
-    "TMG_EMBEDDING_DIMENSIONS": "512"
+    "TMG_POLICY_VERSION": "2026-08-20.v3",
+    "TMG_EMBEDDING_DIMENSIONS": "512",
+    "TMG_EMBEDDING_PROVIDER_ID": "fixture",
+    "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
+    "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified"
   },
   "vectorize": [
     {
