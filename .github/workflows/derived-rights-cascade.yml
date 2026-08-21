@@ -1,0 +1,147 @@
+name: Derived Rights Cascade & Shadow Revocation
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Canonical tenant identifier
+        required: true
+        type: string
+      asset_id:
+        description: Parent canonical asset identifier
+        required: true
+        type: string
+      rights_profile_id:
+        description: Parent canonical rights profile identifier
+        required: true
+        type: string
+      plan_id:
+        description: Exact immutable temporal materialization plan ID
+        required: true
+        type: string
+      reason:
+        description: Parent rights change/revocation reason propagated to derived children
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmg-derived-rights-cascade-${{ inputs.tenant_id }}-${{ inputs.asset_id }}-${{ inputs.plan_id }}
+  cancel-in-progress: false
+
+jobs:
+  cascade:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TMG_MEDIA_BUCKET: tmg-video-assets-dev
+      TMG_MARENGO_SHADOW_INDEX: tmg-marengo-shadow-eval-512-dev
+      TMG_CASCADE_TENANT_ID: ${{ inputs.tenant_id }}
+      TMG_CASCADE_PARENT_ASSET_ID: ${{ inputs.asset_id }}
+      TMG_CASCADE_PARENT_RIGHTS_PROFILE_ID: ${{ inputs.rights_profile_id }}
+      TMG_CASCADE_PLAN_ID: ${{ inputs.plan_id }}
+      TMG_CASCADE_REASON: ${{ inputs.reason }}
+      TMG_CASCADE_PARENT_CURRENT_RIGHTS_PATH: /tmp/tmg-cascade-parent-current-rights.json
+      TMG_CASCADE_PLAN_PATH: /tmp/tmg-cascade-plan.json
+      TMG_CASCADE_OUTPUT_ROOT: /tmp/tmg-derived-rights-cascade
+      TMG_CASCADE_SUMMARY_PATH: /tmp/tmg-derived-rights-cascade-summary.json
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+      - name: Validate credentials and repository controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+      - name: Load parent current rights and exact immutable temporal plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/${TMG_CASCADE_TENANT_ID}/assets/${TMG_CASCADE_PARENT_ASSET_ID}"
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_CASCADE_PARENT_RIGHTS_PROFILE_ID}/current.json" --file "${TMG_CASCADE_PARENT_CURRENT_RIGHTS_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/temporal-segments/${TMG_CASCADE_PLAN_ID}.json" --file "${TMG_CASCADE_PLAN_PATH}" --remote
+          node scripts/derived-rights-cascade.mjs validate-parent
+      - name: Revoke derived rights first, then clean active shadow vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TMG_CASCADE_OUTPUT_ROOT}"
+          node - <<'NODE' > /tmp/tmg-cascade-children.tsv
+          const fs = require('fs');
+          const plan = JSON.parse(fs.readFileSync(process.env.TMG_CASCADE_PLAN_PATH, 'utf8'));
+          for (const c of plan.children) console.log([c.childAssetId,c.childRightsProfileId,c.childRoot,c.manifestKey,c.currentRightsKey].join('\t'));
+          NODE
+          while IFS=$'\t' read -r CHILD_ASSET CHILD_RIGHTS CHILD_ROOT MANIFEST_KEY CURRENT_KEY; do
+            OUT="${TMG_CASCADE_OUTPUT_ROOT}/${CHILD_ASSET}"
+            mkdir -p "${OUT}"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${MANIFEST_KEY}" --file "${OUT}/manifest.json" --remote
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${CURRENT_KEY}" --file "${OUT}/current-before.json" --remote
+            REVISION_KEY="$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(x.revisionKey)' "${OUT}/current-before.json")"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${REVISION_KEY}" --file "${OUT}/rights-before.json" --remote
+            RECEIPT_KEY="${CHILD_ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json"
+            set +e
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" --file "${OUT}/shadow-receipt.json" --remote >/tmp/cascade-receipt.log 2>&1
+            RECEIPT_STATUS=$?
+            set -e
+            if [ "${RECEIPT_STATUS}" -ne 0 ]; then rm -f "${OUT}/shadow-receipt.json"; fi
+            export TMG_CASCADE_CHILD_MANIFEST_PATH="${OUT}/manifest.json"
+            export TMG_CASCADE_CHILD_CURRENT_RIGHTS_PATH="${OUT}/current-before.json"
+            export TMG_CASCADE_CHILD_RIGHTS_PATH="${OUT}/rights-before.json"
+            export TMG_CASCADE_CHILD_SHADOW_RECEIPT_PATH="${OUT}/shadow-receipt.json"
+            export TMG_CASCADE_CHILD_OUTPUT_DIR="${OUT}"
+            node scripts/derived-rights-cascade.mjs prepare-child
+            STATUS="$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(x.status)' "${OUT}/cascade-result.json")"
+            if [ "${STATUS}" = "revoked" ]; then
+              NEW_REV="$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(String(x.revision))' "${OUT}/revoked-rights.json")"
+              pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/rights/${CHILD_RIGHTS}/r${NEW_REV}.json" --file "${OUT}/revoked-rights.json" --content-type application/json --remote
+              pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/control/rights/${CHILD_RIGHTS}/current.json" --file "${OUT}/current-rights.json" --content-type application/json --remote
+            fi
+            pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/derived-rights-cascade/${GITHUB_RUN_ID}.json" --file "${OUT}/cascade-event.json" --content-type application/json --remote
+            SHADOW_ACTION="$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(x.shadowAction)' "${OUT}/cascade-result.json")"
+            if [ "${SHADOW_ACTION}" = "revoke_vector" ]; then
+              export TMG_CASCADE_CHILD_RESULT_PATH="${OUT}/cascade-result.json"
+              export TMG_CASCADE_CHILD_REVOKED_RECEIPT_PATH="${OUT}/shadow-revoked-receipt.json"
+              export TMG_CASCADE_CHILD_SHADOW_EVENT_PATH="${OUT}/shadow-revocation-event.json"
+              node scripts/derived-rights-cascade.mjs delete-shadow
+              pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" --file "${OUT}/shadow-revoked-receipt.json" --content-type application/json --remote
+              pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${CHILD_ROOT}/events/shadow-revocation/${GITHUB_RUN_ID}-cascade.json" --file "${OUT}/shadow-revocation-event.json" --content-type application/json --remote
+            fi
+          done < /tmp/tmg-cascade-children.tsv
+      - name: Persist aggregate cascade evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/derived-rights-cascade.mjs summarize
+          ROOT="tenants/${TMG_CASCADE_TENANT_ID}/assets/${TMG_CASCADE_PARENT_ASSET_ID}"
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${ROOT}/events/derived-rights-cascade/${GITHUB_RUN_ID}.json" --file "${TMG_CASCADE_SUMMARY_PATH}" --content-type application/json --remote
+      - name: Upload cascade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-derived-rights-cascade-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.TMG_CASCADE_SUMMARY_PATH }}
+            /tmp/tmg-derived-rights-cascade/*/cascade-result.json
+            /tmp/tmg-derived-rights-cascade/*/revoked-rights.json
+            /tmp/tmg-derived-rights-cascade/*/current-rights.json
+            /tmp/tmg-derived-rights-cascade/*/cascade-event.json
+            /tmp/tmg-derived-rights-cascade/*/shadow-revoked-receipt.json
+            /tmp/tmg-derived-rights-cascade/*/shadow-revocation-event.json
