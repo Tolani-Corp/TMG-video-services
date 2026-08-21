@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "1.0.0",
+  "phase": "development_shadow",
+  "defaultDecision": "deny",
+  "authoritativePromotionEnabled": false,
+  "requiredEvidence": {
+    "providerAcceptanceState": "development_shadow_verified",
+    "cascadeAcceptanceState": "development_cascade_verified",
+    "explicitReleaseApproval": true
+  },
+  "controlPlane": {
+    "promotionDecisionEngine": true,
+    "tenantEntitlementEvaluator": true,
+    "quotaEvaluator": true,
+    "usageEventSchema": true
+  },
+  "runtimeEnforcement": {
+    "tenantAuthentication": false,
+    "tenantIsolation": false,
+    "entitlementGate": false,
+    "quotaPersistence": false,
+    "usageMeterPersistence": false,
+    "abuseControls": false,
+    "billingMapping": false
+  },
+  "promotionTargets": {
+    "authoritative_embedding": {
+      "allowed": false,
+      "requires": [
+        "tenantAuthentication",
+        "tenantIsolation",
+        "entitlementGate",
+        "quotaPersistence",
+        "usageMeterPersistence",
+        "explicitReleaseApproval"
+      ]
+    },
+    "public_api": {
+      "allowed": false,
+      "requires": [
+        "tenantAuthentication",
+        "tenantIsolation",
+        "entitlementGate",
+        "quotaPersistence",
+        "usageMeterPersistence",
+        "abuseControls",
+        "explicitReleaseApproval"
+      ]
+    },
+    "mcp": {
+      "allowed": false,
+      "requires": [
+        "tenantAuthentication",
+        "tenantIsolation",
+        "entitlementGate",
+        "quotaPersistence",
+        "usageMeterPersistence",
+        "abuseControls",
+        "explicitReleaseApproval"
+      ]
+    },
+    "commercial_use": {
+      "allowed": false,
+      "requires": [
+        "tenantAuthentication",
+        "tenantIsolation",
+        "entitlementGate",
+        "quotaPersistence",
+        "usageMeterPersistence",
+        "abuseControls",
+        "billingMapping",
+        "explicitReleaseApproval"
+      ]
+    }
+  }
+}
