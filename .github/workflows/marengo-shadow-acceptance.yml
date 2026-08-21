@@ -102,8 +102,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          command -v ffmpeg >/dev/null
-          command -v ffprobe >/dev/null
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            echo "FFmpeg not present on runner; installing Ubuntu package for acceptance fixture generation."
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -hide_banner -version | head -n 1
           node scripts/generate-marengo-shadow-fixture.mjs
 
       - name: Provision isolated R2 and Marengo Vectorize resources
