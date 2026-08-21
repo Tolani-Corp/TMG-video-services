@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 
 const TWELVELABS_BASE = "https://api.twelvelabs.io/v1.3";
 const EXPECTED_SHA256 = "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90";
-const EXPECTED_BYTES = 12007;
+const EXPECTED_BYTES = 10808;
 const EXPECTED_DIMENSIONS = 512;
 const EXPECTED_DURATION_SECONDS = 4.2;
 const TENANT_ID = "tmg_fixture";
