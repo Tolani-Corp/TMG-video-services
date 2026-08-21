@@ -2,7 +2,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 
 const TWELVELABS_BASE = "https://api.twelvelabs.io/v1.3";
-const EXPECTED_SHA256 = "82ab089f4b674d3660b76c3a640cf1925ad6445ca5aee31e754a825df2b3aa90";
+const EXPECTED_SHA256 = "b135d0db0f805c29829dac9c842ff8ff951da7756a24ae9e4b21a20d8fab0c02";
 const EXPECTED_BYTES = 10808;
 const EXPECTED_DIMENSIONS = 512;
 const EXPECTED_DURATION_SECONDS = 4.2;
