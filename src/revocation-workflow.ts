@@ -82,6 +82,7 @@ export class RevocationWorkflow extends WorkflowEntrypoint<Env, unknown> {
     const root = assetRoot(request);
     const rightsKey =
       `${root}/control/rights/${request.rightsProfileId}/r${request.rightsRevision}.json`;
+    const currentRightsKey = `${root}/control/rights/${request.rightsProfileId}/current.json`;
     const receiptKey =
       `${root}/control/index-receipts/${request.embeddingProfileId}.json`;
     const revocationEventKey = `${root}/events/revocation/${event.instanceId}.json`;
@@ -118,8 +119,20 @@ export class RevocationWorkflow extends WorkflowEntrypoint<Env, unknown> {
     const revokedRightsKey =
       `${root}/control/rights/${request.rightsProfileId}/r${revokedRights.revision}.json`;
 
-    await step.do("persist revoked rights revision", async () => {
-      await putJson(this.env.MEDIA_BUCKET, revokedRightsKey, revokedRights);
+    await step.do("persist revoked rights revision and advance current pointer", async () => {
+      await Promise.all([
+        putJson(this.env.MEDIA_BUCKET, revokedRightsKey, revokedRights),
+        putJson(this.env.MEDIA_BUCKET, currentRightsKey, {
+          schemaVersion: "1.0.0",
+          tenantId: request.tenantId,
+          assetId: request.assetId,
+          rightsProfileId: request.rightsProfileId,
+          currentRevision: revokedRights.revision,
+          evidenceState: revokedRights.evidenceState,
+          updatedAt: revokedRights.updatedAt,
+          revisionKey: revokedRightsKey,
+        }),
+      ]);
     });
 
     const revokedReceipt = await step.do(

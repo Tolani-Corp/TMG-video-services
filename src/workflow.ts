@@ -48,11 +48,23 @@ export class IngestionWorkflow extends WorkflowEntrypoint<Env, unknown> {
     );
     const nowIso = event.timestamp.toISOString();
     const keys = buildArtifactKeys(request.manifest, request.rights);
+    const currentRightsKey =
+      `${keys.assetRoot}/control/rights/${request.rights.rightsProfileId}/current.json`;
 
-    await step.do("persist canonical manifest and rights revision", async () => {
+    await step.do("persist canonical manifest and current rights revision", async () => {
       await Promise.all([
         putJson(this.env.MEDIA_BUCKET, keys.manifest, request.manifest),
         putJson(this.env.MEDIA_BUCKET, keys.rightsRevision, request.rights),
+        putJson(this.env.MEDIA_BUCKET, currentRightsKey, {
+          schemaVersion: "1.0.0",
+          tenantId: request.manifest.tenantId,
+          assetId: request.manifest.assetId,
+          rightsProfileId: request.rights.rightsProfileId,
+          currentRevision: request.rights.revision,
+          evidenceState: request.rights.evidenceState,
+          updatedAt: request.rights.updatedAt,
+          revisionKey: keys.rightsRevision,
+        }),
       ]);
     });
 

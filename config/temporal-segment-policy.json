@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "state": "development",
+  "authority": "materialization_only",
+  "source": {
+    "requiresCanonicalManifest": true,
+    "requiresCurrentVerifiedRights": true,
+    "requiresExactR2Sha256": true,
+    "maxSourceBytes": 1073741824
+  },
+  "segments": {
+    "minDurationMs": 4000,
+    "maxDurationMs": 30000,
+    "maxSegmentsPerRun": 64,
+    "requireNonOverlapping": true,
+    "outputMimeType": "video/mp4",
+    "publicationState": "review"
+  },
+  "shadowEvaluation": {
+    "optional": true,
+    "defaultEnabled": false,
+    "providerId": "twelvelabs-marengo3",
+    "compatibilityGroup": "marengo3_fused_512_v1",
+    "authoritativeRoutingAllowed": false,
+    "publicApiAllowed": false,
+    "mcpAllowed": false,
+    "commercialUseAllowed": false
+  }
+}

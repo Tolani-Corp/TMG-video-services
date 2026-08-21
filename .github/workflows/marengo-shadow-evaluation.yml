@@ -54,6 +54,10 @@ jobs:
       TMG_SHADOW_RIGHTS_REVISION: ${{ inputs.rights_revision }}
       TMG_SHADOW_MANIFEST_PATH: /tmp/tmg-shadow-manifest.json
       TMG_SHADOW_RIGHTS_PATH: /tmp/tmg-shadow-rights.json
+      TMG_SHADOW_CURRENT_RIGHTS_PATH: /tmp/tmg-shadow-current-rights.json
+      TMG_SHADOW_DERIVATION_PATH: /tmp/tmg-shadow-derivation.json
+      TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH: /tmp/tmg-shadow-parent-current-rights.json
+      TMG_SHADOW_PARENT_RIGHTS_PATH: /tmp/tmg-shadow-parent-rights.json
       TMG_SHADOW_MEDIA_PATH: /tmp/tmg-shadow-media.mp4
       TMG_SHADOW_RECEIPT_PATH: /tmp/tmg-shadow-receipt.json
       TMG_SHADOW_EVENT_PATH: /tmp/tmg-shadow-event.json
@@ -96,17 +100,55 @@ jobs:
           node scripts/ensure-shadow-vector-index.mjs
           node scripts/ensure-metadata-indexes.mjs
 
-      - name: Read canonical manifest and rights evidence from private R2
+      - name: Read canonical manifest, selected rights, and current pointer from private R2
         shell: bash
         run: |
           set -euo pipefail
           ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
-          pnpm exec wrangler r2 object get \
-            "${TMG_MEDIA_BUCKET}/${ROOT}/control/manifest-v1.json" \
-            --file "${TMG_SHADOW_MANIFEST_PATH}" --remote
-          pnpm exec wrangler r2 object get \
-            "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_SHADOW_RIGHTS_PROFILE_ID}/r${TMG_SHADOW_RIGHTS_REVISION}.json" \
-            --file "${TMG_SHADOW_RIGHTS_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/manifest-v1.json" --file "${TMG_SHADOW_MANIFEST_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_SHADOW_RIGHTS_PROFILE_ID}/r${TMG_SHADOW_RIGHTS_REVISION}.json" --file "${TMG_SHADOW_RIGHTS_PATH}" --remote
+          set +e
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/rights/${TMG_SHADOW_RIGHTS_PROFILE_ID}/current.json" --file "${TMG_SHADOW_CURRENT_RIGHTS_PATH}" --remote >/tmp/current-rights-get.log 2>&1
+          current_status=$?
+          set -e
+          if [ "${{ inputs.action }}" = "evaluate" ] && [ "${current_status}" -ne 0 ]; then
+            cat /tmp/current-rights-get.log
+            echo "::error::Current rights pointer is required for shadow evaluation"
+            exit 2
+          fi
+          if [ "${current_status}" -ne 0 ]; then rm -f "${TMG_SHADOW_CURRENT_RIGHTS_PATH}"; fi
+
+      - name: Discover and load derived parent rights lineage
+        if: ${{ inputs.action == 'evaluate' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
+          set +e
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/derivation/temporal-segment-v1.json" --file "${TMG_SHADOW_DERIVATION_PATH}" --remote >/tmp/derivation-get.log 2>&1
+          derivation_status=$?
+          set -e
+          if [ "${derivation_status}" -ne 0 ]; then
+            rm -f "${TMG_SHADOW_DERIVATION_PATH}"
+            echo "Canonical asset has no temporal-segment derivation lineage."
+          else
+            node - <<'NODE'
+          const fs = require('fs');
+          const d = JSON.parse(fs.readFileSync(process.env.TMG_SHADOW_DERIVATION_PATH, 'utf8'));
+          if (!d?.parent?.assetId || !d?.parent?.rightsProfileId) throw new Error('Invalid temporal derivation parent identity');
+          fs.appendFileSync(process.env.GITHUB_ENV, `TMG_SHADOW_PARENT_ASSET_ID=${d.parent.assetId}\nTMG_SHADOW_PARENT_RIGHTS_PROFILE_ID=${d.parent.rightsProfileId}\n`);
+          NODE
+            PARENT_ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_PARENT_ASSET_ID}"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${PARENT_ROOT}/control/rights/${TMG_SHADOW_PARENT_RIGHTS_PROFILE_ID}/current.json" --file "${TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH}" --remote
+            PARENT_REVISION="$(node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.env.TMG_SHADOW_PARENT_CURRENT_RIGHTS_PATH,"utf8"));process.stdout.write(String(p.currentRevision))')"
+            pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${PARENT_ROOT}/control/rights/${TMG_SHADOW_PARENT_RIGHTS_PROFILE_ID}/r${PARENT_REVISION}.json" --file "${TMG_SHADOW_PARENT_RIGHTS_PATH}" --remote
+          fi
+
+      - name: Verify current rights and run shadow preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/validate-shadow-current-rights.mjs
           node scripts/marengo-shadow-evaluate.mjs preflight
 
       - name: Rehydrate and verify exact R2 media bytes
@@ -114,9 +156,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec wrangler r2 object get \
-            "${TMG_MEDIA_BUCKET}/${TMG_SHADOW_MEDIA_OBJECT_KEY}" \
-            --file "${TMG_SHADOW_MEDIA_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${TMG_SHADOW_MEDIA_OBJECT_KEY}" --file "${TMG_SHADOW_MEDIA_PATH}" --remote
           actual_sha="$(sha256sum "${TMG_SHADOW_MEDIA_PATH}" | awk '{print $1}')"
           actual_bytes="$(stat -c '%s' "${TMG_SHADOW_MEDIA_PATH}")"
           test "${actual_sha}" = "${TMG_SHADOW_EXPECTED_SHA256}"
@@ -128,9 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
-          pnpm exec wrangler r2 object get \
-            "${TMG_MEDIA_BUCKET}/${ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" \
-            --file "${TMG_SHADOW_RECEIPT_PATH}" --remote
+          pnpm exec wrangler r2 object get "${TMG_MEDIA_BUCKET}/${ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json" --file "${TMG_SHADOW_RECEIPT_PATH}" --remote
 
       - name: Generate and index Marengo shadow embedding
         if: ${{ inputs.action == 'evaluate' }}
@@ -152,19 +190,9 @@ jobs:
           set -euo pipefail
           ROOT="tenants/${TMG_SHADOW_TENANT_ID}/assets/${TMG_SHADOW_ASSET_ID}"
           RECEIPT_KEY="${ROOT}/control/shadow-evaluation/twelvelabs_marengo3_fused_512_v1.json"
-          if [ "${{ inputs.action }}" = "evaluate" ]; then
-            EVENT_KEY="${ROOT}/events/shadow-evaluation/${GITHUB_RUN_ID}.json"
-          else
-            EVENT_KEY="${ROOT}/events/shadow-revocation/${GITHUB_RUN_ID}.json"
-          fi
-          pnpm exec wrangler r2 object put \
-            "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" \
-            --file "${TMG_SHADOW_RECEIPT_PATH}" \
-            --content-type application/json --remote
-          pnpm exec wrangler r2 object put \
-            "${TMG_MEDIA_BUCKET}/${EVENT_KEY}" \
-            --file "${TMG_SHADOW_EVENT_PATH}" \
-            --content-type application/json --remote
+          if [ "${{ inputs.action }}" = "evaluate" ]; then EVENT_KEY="${ROOT}/events/shadow-evaluation/${GITHUB_RUN_ID}.json"; else EVENT_KEY="${ROOT}/events/shadow-revocation/${GITHUB_RUN_ID}.json"; fi
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${RECEIPT_KEY}" --file "${TMG_SHADOW_RECEIPT_PATH}" --content-type application/json --remote
+          pnpm exec wrangler r2 object put "${TMG_MEDIA_BUCKET}/${EVENT_KEY}" --file "${TMG_SHADOW_EVENT_PATH}" --content-type application/json --remote
 
       - name: Upload execution evidence
         if: always()
