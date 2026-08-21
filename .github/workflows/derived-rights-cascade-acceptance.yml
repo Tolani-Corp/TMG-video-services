@@ -227,19 +227,21 @@ jobs:
             children=$((children+1)); lineage=$((lineage+1)); revoked=$((revoked+1))
           done < /tmp/cascade-preserve.tsv
           node - <<'NODE'
-          const fs=require('fs');
-          const index=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
-          const summary=JSON.parse(fs.readFileSync(process.env.TMG_CASCADE_SUMMARY_PATH,'utf8'));
-          const ids=index.children.map(c=>JSON.parse(fs.readFileSync(`${process.env.TMG_CASCADE_OUTPUT_ROOT}/${c.childAssetId}/shadow-revoked-receipt.json`,'utf8')).vectorId);
-          const account=process.env.CLOUDFLARE_ACCOUNT_ID,indexName=process.env.TMG_MARENGO_SHADOW_INDEX,token=process.env.CLOUDFLARE_API_TOKEN;
-          const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/vectorize/v2/indexes/${encodeURIComponent(indexName)}/get_by_ids`,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({ids})});
-          const b=await r.json(); if(!r.ok||b?.success!==true) throw new Error('Vectorize verification failed');
-          const remaining=Array.isArray(b.result)?b.result.length:0; if(remaining!==0) throw new Error(`Expected zero vectors, got ${remaining}`);
-          if(summary.childCount!==3||summary.revokedChildren!==3||summary.deletedShadowVectors!==3) throw new Error('Cascade summary mismatch');
-          const out={schemaVersion:'1.0.0',status:'passed',purpose:'derived_rights_cascade_development_acceptance',runId:process.env.GITHUB_RUN_ID,bucket:process.env.TMG_MEDIA_BUCKET,index:process.env.TMG_MARENGO_SHADOW_INDEX,planId:index.planId,parent:{assetId:index.parentAssetId,materializedRightsRevision:index.parentRightsRevision,currentRightsRevision:2,evidenceState:'revoked',sha256:process.env.TMG_TEMPORAL_PARENT_SHA256},children:{count:3,revokedRights:3,deletedShadowVectors:3,postDeleteCount:0,mediaPreserved:3,lineagePreserved:3},deleteMutationIds:summary.children.map(c=>c.shadowRevocation?.deleteMutationId).filter(Boolean),completedAt:new Date().toISOString()};
-          if(out.deleteMutationIds.length!==3||new Set(out.deleteMutationIds).size!==3) throw new Error('Expected three distinct delete mutation IDs');
-          fs.writeFileSync(process.env.TMG_CASCADE_FINAL_EVIDENCE,JSON.stringify(out,null,2)+'\n');
-          console.log(JSON.stringify(out));
+          (async () => {
+            const fs=require('fs');
+            const index=JSON.parse(fs.readFileSync(process.env.TMG_SEGMENT_INDEX_PATH,'utf8'));
+            const summary=JSON.parse(fs.readFileSync(process.env.TMG_CASCADE_SUMMARY_PATH,'utf8'));
+            const ids=index.children.map(c=>JSON.parse(fs.readFileSync(`${process.env.TMG_CASCADE_OUTPUT_ROOT}/${c.childAssetId}/shadow-revoked-receipt.json`,'utf8')).vectorId);
+            const account=process.env.CLOUDFLARE_ACCOUNT_ID,indexName=process.env.TMG_MARENGO_SHADOW_INDEX,token=process.env.CLOUDFLARE_API_TOKEN;
+            const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/vectorize/v2/indexes/${encodeURIComponent(indexName)}/get_by_ids`,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({ids})});
+            const b=await r.json(); if(!r.ok||b?.success!==true) throw new Error('Vectorize verification failed');
+            const remaining=Array.isArray(b.result)?b.result.length:0; if(remaining!==0) throw new Error(`Expected zero vectors, got ${remaining}`);
+            if(summary.childCount!==3||summary.revokedChildren!==3||summary.deletedShadowVectors!==3) throw new Error('Cascade summary mismatch');
+            const out={schemaVersion:'1.0.0',status:'passed',purpose:'derived_rights_cascade_development_acceptance',runId:process.env.GITHUB_RUN_ID,bucket:process.env.TMG_MEDIA_BUCKET,index:process.env.TMG_MARENGO_SHADOW_INDEX,planId:index.planId,parent:{assetId:index.parentAssetId,materializedRightsRevision:index.parentRightsRevision,currentRightsRevision:2,evidenceState:'revoked',sha256:process.env.TMG_TEMPORAL_PARENT_SHA256},children:{count:3,revokedRights:3,deletedShadowVectors:3,postDeleteCount:0,mediaPreserved:3,lineagePreserved:3},deleteMutationIds:summary.children.map(c=>c.shadowRevocation?.deleteMutationId).filter(Boolean),completedAt:new Date().toISOString()};
+            if(out.deleteMutationIds.length!==3||new Set(out.deleteMutationIds).size!==3) throw new Error('Expected three distinct delete mutation IDs');
+            fs.writeFileSync(process.env.TMG_CASCADE_FINAL_EVIDENCE,JSON.stringify(out,null,2)+'\n');
+            console.log(JSON.stringify(out));
+          })().catch((error)=>{console.error(error?.stack??String(error));process.exit(1);});
           NODE
 
       - name: Upload cascade acceptance evidence
