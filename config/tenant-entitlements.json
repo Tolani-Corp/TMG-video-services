@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0.0",
+  "defaultDecision": "deny",
+  "tenants": {
+    "tmg_fixture": {
+      "enabled": true,
+      "environment": "development",
+      "allowedPurposes": ["internal_search"],
+      "allowedProviderIds": ["fixture"],
+      "maxProviderAuthority": "fixture",
+      "quotas": {
+        "maxRequestsPerHour": 120,
+        "maxMediaDurationMsPerDay": 3600000,
+        "maxVectorsPerDay": 1000
+      }
+    }
+  }
+}
