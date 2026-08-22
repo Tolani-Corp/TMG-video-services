@@ -100,7 +100,7 @@ jobs:
             exit 4
           }
           bootstrap_comments="$(gh issue view 18 --repo "$GITHUB_REPOSITORY" --json comments --jq \
-            "[.comments[].body | select(contains(\"Production Infrastructure Bootstrap — run ${bootstrap_run}\") and contains(\"Status: \\\`success\\\`\"))] | length")"
+            "[.comments[].body | select(contains(\"Production Infrastructure Bootstrap — run ${bootstrap_run}\") and contains(\"Status:\") and contains(\"success\"))] | length")"
           test "$bootstrap_comments" -ge 1 || {
             echo "Bound successful production bootstrap evidence is missing from Issue #18" >&2
             exit 4
