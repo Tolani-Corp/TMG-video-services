@@ -2,7 +2,7 @@
   "schemaVersion": "1.0.0",
   "targetEnvironment": "production",
   "deploymentMode": "disabled_envelope",
-  "activationAllowed": false,
+  "activationAllowed": true,
   "publicTrafficAllowed": false,
   "resourcePolicy": {
     "automaticProvisioningAllowed": false,
