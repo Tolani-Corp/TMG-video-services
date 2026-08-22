@@ -101,3 +101,4 @@ export default {
 
 export { IngestionWorkflow } from "./workflow";
 export { RevocationWorkflow } from "./revocation-workflow";
+export { TenantUsageLedger } from "./tenant-usage-ledger";

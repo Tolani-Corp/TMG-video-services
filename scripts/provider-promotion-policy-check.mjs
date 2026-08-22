@@ -33,7 +33,13 @@ if (promotion.requiredEvidence?.explicitReleaseApproval !== true) {
   failures.push("provider promotion must require explicit release approval");
 }
 
-for (const control of ["promotionDecisionEngine", "tenantEntitlementEvaluator", "quotaEvaluator", "usageEventSchema"]) {
+for (const control of [
+  "promotionDecisionEngine",
+  "tenantEntitlementEvaluator",
+  "quotaEvaluator",
+  "usageEventSchema",
+  "tenantUsageLedgerCode",
+]) {
   if (promotion.controlPlane?.[control] !== true) failures.push(`control-plane capability ${control} must be present`);
 }
 for (const control of [
@@ -94,6 +100,16 @@ if (wrangler.vars?.TMG_PUBLIC_API_ENABLED !== "false" || wrangler.vars?.TMG_MCP_
 }
 if (wrangler.vars?.TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED !== "false") {
   failures.push("authoritative external-provider egress must remain disabled");
+}
+if (wrangler.vars?.TMG_TENANT_USAGE_LEDGER_ENABLED !== "false") {
+  failures.push("tenant usage ledger runtime must remain disabled until isolated live acceptance");
+}
+if (wrangler.exports?.TenantUsageLedger?.type !== "durable-object" || wrangler.exports?.TenantUsageLedger?.storage !== "sqlite") {
+  failures.push("TenantUsageLedger must use declarative SQLite Durable Object lifecycle");
+}
+const ledgerBinding = wrangler.durable_objects?.bindings?.find((binding) => binding.name === "TENANT_USAGE_LEDGER");
+if (ledgerBinding?.class_name !== "TenantUsageLedger") {
+  failures.push("TENANT_USAGE_LEDGER binding must point to TenantUsageLedger");
 }
 if (!String(pkg.scripts?.["marketing:check"] ?? "").includes("provider-promotion-policy-check.mjs")) {
   failures.push("marketing:check must enforce provider-promotion-policy-check.mjs");

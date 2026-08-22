@@ -12,7 +12,8 @@
     "promotionDecisionEngine": true,
     "tenantEntitlementEvaluator": true,
     "quotaEvaluator": true,
-    "usageEventSchema": true
+    "usageEventSchema": true,
+    "tenantUsageLedgerCode": true
   },
   "runtimeEnforcement": {
     "tenantAuthentication": false,
