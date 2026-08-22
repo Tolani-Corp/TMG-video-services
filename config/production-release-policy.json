@@ -25,7 +25,7 @@
     },
     "productionInfrastructureBootstrap": {
       "required": true,
-      "satisfied": true
+      "satisfied": false
     },
     "productionInfrastructureReconciliation": {
       "required": true,
