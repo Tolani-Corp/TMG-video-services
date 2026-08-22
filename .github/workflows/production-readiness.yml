@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   audit:
@@ -110,6 +111,53 @@ jobs:
           NODE
 
           exit "$status"
+
+      - name: Publish sanitized readiness summary to Issue 18
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p production-audit
+
+          read_status() {
+            local name="$1"
+            if [[ -f "production-audit/${name}.status" ]]; then
+              cat "production-audit/${name}.status"
+            else
+              printf 'not-run'
+            fi
+          }
+
+          token_state="missing"
+          account_state="missing"
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && token_state="present"
+          [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && account_state="present"
+
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat > production-audit/issue-comment.md <<EOF
+          ### Production Readiness Audit — run ${GITHUB_RUN_ID}
+
+          - Target: `production`
+          - Commit: `${GITHUB_SHA}`
+          - Job state before reporting: `${{ job.status }}`
+          - Mutation authority: **false**
+          - Activation authority: **false**
+          - Cloudflare API token: **${token_state}**
+          - Cloudflare account ID: **${account_state}**
+          - `whoami`: `$(read_status whoami)`
+          - R2 `tmg-video-assets-prod`: `$(read_status r2_bucket)`
+          - Vectorize `tmg-video-segments-512-prod`: `$(read_status vector_index)`
+          - Workflow `tmg-video-ingestion-prod`: `$(read_status ingestion_workflow)`
+          - Workflow `tmg-video-revocation-prod`: `$(read_status revocation_workflow)`
+          - Production deploy dry-run: `$(read_status deploy_dry_run)`
+          - Run: ${run_url}
+
+          This audit is read-only. A passing result does not authorize production mutation, public traffic, provider promotion, external-provider egress, MCP, billing, or commercial use. Issue #14 and the gates in `config/production-release-policy.json` remain controlling.
+          EOF
+
+          gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file production-audit/issue-comment.md
 
       - name: Upload production readiness evidence
         if: always()
