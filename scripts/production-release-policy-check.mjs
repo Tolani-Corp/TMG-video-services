@@ -125,6 +125,8 @@ if (publicContext.publicStatus !== "G0") failures.push("public product context m
 
 if (!workflow.includes("environment: production")) failures.push("production readiness workflow must use GitHub environment production");
 if (!workflow.includes("wrangler deploy --env production --dry-run")) failures.push("production readiness workflow must compile with deploy --dry-run");
+if (!workflow.includes("issues: write")) failures.push("production readiness workflow must be able to publish sanitized audit evidence to Issue #18");
+if (!workflow.includes("gh issue comment 18")) failures.push("production readiness workflow must self-report sanitized results to Issue #18");
 for (const forbidden of [
   "r2 bucket create",
   "vectorize create",
