@@ -1,0 +1,113 @@
+name: Production Readiness Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify production credential presence
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN is missing from GitHub environment production"; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "CLOUDFLARE_ACCOUNT_ID is missing from GitHub environment production"; exit 1; }
+
+      - name: Validate production policy and bindings
+        run: |
+          pnpm production-release-policy:check
+          pnpm exec wrangler types --env production
+          pnpm typecheck
+
+      - name: Run read-only Cloudflare production audit
+        id: cloudflare_audit
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p production-audit/dry-run
+          status=0
+
+          run_check() {
+            name="$1"
+            shift
+            echo "== ${name} =="
+            if "$@" >"production-audit/${name}.log" 2>&1; then
+              echo "pass" >"production-audit/${name}.status"
+              cat "production-audit/${name}.log"
+            else
+              code=$?
+              echo "fail:${code}" >"production-audit/${name}.status"
+              cat "production-audit/${name}.log"
+              status=1
+            fi
+          }
+
+          run_check whoami pnpm exec wrangler whoami
+          run_check r2_bucket pnpm exec wrangler r2 bucket info tmg-video-assets-prod --json
+          run_check vector_index pnpm exec wrangler vectorize get tmg-video-segments-512-prod --json
+          run_check ingestion_workflow pnpm exec wrangler workflows describe tmg-video-ingestion-prod
+          run_check revocation_workflow pnpm exec wrangler workflows describe tmg-video-revocation-prod
+          run_check deploy_dry_run pnpm exec wrangler deploy --env production --dry-run --outdir production-audit/dry-run
+
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const readStatus = (name) => fs.existsSync(`production-audit/${name}.status`)
+            ? fs.readFileSync(`production-audit/${name}.status`, "utf8").trim()
+            : "not-run";
+          const evidence = {
+            schemaVersion: "1.0.0",
+            targetEnvironment: "production",
+            headSha: process.env.GITHUB_SHA,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            mutationAuthority: false,
+            activationAuthority: false,
+            resources: {
+              worker: "tmg-video-services-production",
+              r2Bucket: "tmg-video-assets-prod",
+              vectorIndex: "tmg-video-segments-512-prod",
+              ingestionWorkflow: "tmg-video-ingestion-prod",
+              revocationWorkflow: "tmg-video-revocation-prod"
+            },
+            checks: {
+              whoami: readStatus("whoami"),
+              r2Bucket: readStatus("r2_bucket"),
+              vectorIndex: readStatus("vector_index"),
+              ingestionWorkflow: readStatus("ingestion_workflow"),
+              revocationWorkflow: readStatus("revocation_workflow"),
+              deployDryRun: readStatus("deploy_dry_run")
+            }
+          };
+          fs.writeFileSync("production-audit/summary.json", `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+
+          exit "$status"
+
+      - name: Upload production readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-production-readiness-${{ github.run_id }}
+          path: production-audit
+          if-no-files-found: warn
+          retention-days: 90

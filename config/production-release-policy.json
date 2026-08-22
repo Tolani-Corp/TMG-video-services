@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "1.0.0",
+  "targetEnvironment": "production",
+  "deploymentMode": "disabled_envelope",
+  "activationAllowed": false,
+  "publicTrafficAllowed": false,
+  "resourcePolicy": {
+    "automaticProvisioningAllowed": false,
+    "workerName": "tmg-video-services-production",
+    "r2Bucket": "tmg-video-assets-prod",
+    "vectorIndex": "tmg-video-segments-512-prod",
+    "ingestionWorkflow": "tmg-video-ingestion-prod",
+    "revocationWorkflow": "tmg-video-revocation-prod"
+  },
+  "requiredGates": {
+    "repositoryProtection": {
+      "issue": 14,
+      "required": true,
+      "satisfied": false
+    },
+    "exactHeadQuality": {
+      "required": true,
+      "satisfied": false
+    },
+    "productionReadinessAudit": {
+      "required": true,
+      "satisfied": false
+    },
+    "tenantUsageLedgerAcceptance": {
+      "required": true,
+      "satisfied": false
+    },
+    "explicitReleaseApproval": {
+      "required": true,
+      "satisfied": false
+    }
+  },
+  "providerAuthority": {
+    "defaultProviderId": "fixture",
+    "marengoAuthority": "shadow_only",
+    "externalProviderEgressAllowed": false,
+    "authoritativePromotionAllowed": false,
+    "commercialUseAllowed": false
+  },
+  "runtimeFlags": {
+    "TMG_PUBLIC_API_ENABLED": "false",
+    "TMG_MCP_ENABLED": "false",
+    "TMG_INGEST_WORKFLOW_ENABLED": "false",
+    "TMG_TENANT_USAGE_LEDGER_ENABLED": "false",
+    "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
+    "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified"
+  }
+}
