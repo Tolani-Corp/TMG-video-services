@@ -92,6 +92,32 @@
       "sourceCommitSha": "6dbd16c2fc9a9fc1fda1db9a9a6640c640de2bd6",
       "reconciliationRunId": "32592457936",
       "readinessRunId": "32592545975"
+    },
+    "tenantUsageLedgerAcceptance": {
+      "status": "verified",
+      "target": "live_production",
+      "runId": "32606309623",
+      "commitSha": "6d270c4756a00930988e4cbbd4495fc5ca7ca5fa",
+      "frozenFingerprintSha256": "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c",
+      "acceptanceTenant": "prod_acceptance_fixture_v1",
+      "durableObjectNamespaceId": "737c0b2361c2407ba3c765bcb269504f",
+      "artifactId": "9484215245",
+      "artifactZipSha256": "7f7c51de551e30d436b820dc00a1bcf94dc7ad6ba1829813755cb21fa9dd5f1e",
+      "evidencePackageSha256": "d125b05b017a5d15d3601cddcae8553755ee4725c8befdb44c9e12722ac3e59b",
+      "tenantIsolation": "verified",
+      "idempotency": "verified",
+      "quotaBeforeInsert": "verified",
+      "utcWindows": "verified",
+      "sessionPersistence": "verified",
+      "zeroUnexpectedInfrastructureDelta": true,
+      "postAcceptanceReadinessRunId": "32606382461",
+      "postAcceptanceReadinessCommitSha": "6d270c4756a00930988e4cbbd4495fc5ca7ca5fa",
+      "mutationAuthority": false,
+      "activationAuthority": false,
+      "publicTrafficAuthority": false,
+      "providerPromotionAuthority": false,
+      "billingAuthority": false,
+      "commercialAuthority": false
     }
   },
   "providerAuthority": {
