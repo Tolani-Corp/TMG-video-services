@@ -1,0 +1,243 @@
+name: Production Infrastructure Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact main commit SHA already validated by Quality
+        required: true
+        type: string
+      authorization:
+        description: Type RECONCILE_DISABLED_PRODUCTION_INFRASTRUCTURE
+        required: true
+        type: string
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  checks: read
+  actions: read
+  issues: write
+
+jobs:
+  reconcile:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && github.event.issue.number == 18 && github.actor == 'TolaniCorp' && github.event.comment.body == 'RECONCILE_DISABLED_PRODUCTION_INFRASTRUCTURE') }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    outputs:
+      fingerprint_sha256: ${{ steps.fingerprint.outputs.sha256 }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+      RECONCILIATION_AUTHORIZATION: ${{ github.event_name == 'workflow_dispatch' && inputs.authorization || github.event.comment.body }}
+      TMG_PROD_WORKER: tmg-video-services-production
+      TMG_PROD_R2_BUCKET: tmg-video-assets-prod
+      TMG_PROD_VECTOR_INDEX: tmg-video-segments-512-prod
+      TMG_PROD_INGEST_WORKFLOW: tmg-video-ingestion-prod
+      TMG_PROD_REVOKE_WORKFLOW: tmg-video-revocation-prod
+      TMG_RECONCILIATION_OUT: production-reconciliation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Enforce reconciliation governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p production-reconciliation
+
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Production reconciliation must execute from main" >&2
+            exit 2
+          }
+          test "$EXPECTED_SHA" = "$GITHUB_SHA" || {
+            echo "expected_sha must equal the executing main SHA" >&2
+            exit 2
+          }
+          test "$RECONCILIATION_AUTHORIZATION" = "RECONCILE_DISABLED_PRODUCTION_INFRASTRUCTURE" || {
+            echo "Explicit reconciliation authorization phrase is required" >&2
+            exit 2
+          }
+
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          test "$protected" = "true" || {
+            echo "main is not protected" >&2
+            exit 3
+          }
+          issue_state="$(gh issue view 14 --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          test "$issue_state" = "CLOSED" || {
+            echo "Issue #14 must remain closed" >&2
+            exit 3
+          }
+          quality_passes="$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/commits/${EXPECTED_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "validate" and .conclusion == "success" and .app.slug == "github-actions")] | length')"
+          test "$quality_passes" -ge 1 || {
+            echo "Exact expected_sha has no successful GitHub Actions validate check" >&2
+            exit 4
+          }
+
+          bootstrap_sha="$(node -e 'const p=require("./config/production-release-policy.json"); process.stdout.write(p.evidenceBindings.productionInfrastructureBootstrap.commitSha)')"
+          bootstrap_run="$(node -e 'const p=require("./config/production-release-policy.json"); process.stdout.write(String(p.evidenceBindings.productionInfrastructureBootstrap.runId))')"
+          git merge-base --is-ancestor "$bootstrap_sha" "$GITHUB_SHA" || {
+            echo "Bound bootstrap commit is not an ancestor of this candidate" >&2
+            exit 4
+          }
+          bootstrap_comments="$(gh issue view 18 --repo "$GITHUB_REPOSITORY" --json comments --jq \
+            "[.comments[].body | select(contains(\"Production Infrastructure Bootstrap — run ${bootstrap_run}\") and contains(\"Status: \\\`success\\\`\"))] | length")"
+          test "$bootstrap_comments" -ge 1 || {
+            echo "Bound successful production bootstrap evidence is missing from Issue #18" >&2
+            exit 4
+          }
+
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || {
+            echo "CLOUDFLARE_API_TOKEN is missing from GitHub environment production" >&2
+            exit 5
+          }
+          test "$CLOUDFLARE_ACCOUNT_ID" = "d20586cf099d39fcbeb5db4043e20f6f" || {
+            echo "Unexpected Cloudflare account ID" >&2
+            exit 5
+          }
+
+          printf '%s\n' "$EXPECTED_SHA" > production-reconciliation/expected-sha.txt
+          printf 'protected=%s\nissue14=%s\nqualityValidatePasses=%s\nbootstrapRun=%s\nbootstrapSha=%s\n' \
+            "$protected" "$issue_state" "$quality_passes" "$bootstrap_run" "$bootstrap_sha" \
+            > production-reconciliation/governance.txt
+
+      - name: Validate exact production candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm check
+          pnpm cf-typegen:production
+          pnpm typecheck
+          pnpm production:dry-run
+
+      - name: Collect read-only production resource evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler whoami > production-reconciliation/whoami.txt
+          pnpm exec wrangler r2 bucket info "$TMG_PROD_R2_BUCKET" --json > production-reconciliation/r2.json
+          pnpm exec wrangler vectorize get "$TMG_PROD_VECTOR_INDEX" --json > production-reconciliation/vectorize.json
+          pnpm exec wrangler workflows describe "$TMG_PROD_INGEST_WORKFLOW" > production-reconciliation/ingestion-workflow.txt
+          pnpm exec wrangler workflows describe "$TMG_PROD_REVOKE_WORKFLOW" > production-reconciliation/revocation-workflow.txt
+          pnpm exec wrangler deploy --env production --dry-run --outdir production-reconciliation/dry-run
+
+      - name: Reconcile live bindings and freeze candidate fingerprint
+        id: fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/reconcile-production-infrastructure.mjs
+          sha256="$(awk '{print $1}' production-reconciliation/infrastructure-fingerprint.sha256)"
+          test -n "$sha256"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pre-readiness reconciliation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-production-reconciliation-${{ github.run_id }}
+          path: production-reconciliation
+          if-no-files-found: error
+          retention-days: 90
+
+  readiness:
+    needs: reconcile
+    uses: ./.github/workflows/production-readiness.yml
+    secrets: inherit
+
+  freeze:
+    needs: [reconcile, readiness]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Download reconciled fingerprint evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: tmg-production-reconciliation-${{ github.run_id }}
+          path: production-reconciliation
+
+      - name: Create immutable freeze record
+        env:
+          FINGERPRINT_SHA256: ${{ needs.reconcile.outputs.fingerprint_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$FINGERPRINT_SHA256"
+          actual="$(sha256sum production-reconciliation/infrastructure-fingerprint.json | awk '{print $1}')"
+          test "$actual" = "$FINGERPRINT_SHA256"
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const fingerprint = JSON.parse(fs.readFileSync("production-reconciliation/infrastructure-fingerprint.json", "utf8"));
+          const freeze = {
+            schemaVersion: "1.0.0",
+            targetEnvironment: "production",
+            sourceCommitSha: fingerprint.sourceCommitSha,
+            fingerprintSha256: process.env.FINGERPRINT_SHA256,
+            reconciliationRunId: process.env.GITHUB_RUN_ID,
+            productionReadinessReplay: "success",
+            mutationAuthority: false,
+            activationAuthority: false,
+            publicTrafficAuthority: false,
+            providerAuthority: "fixture_default_marengo_shadow_only"
+          };
+          fs.writeFileSync("production-reconciliation/freeze-record.json", `${JSON.stringify(freeze, null, 2)}\n`);
+          NODE
+
+      - name: Publish frozen fingerprint to Issue 18
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINGERPRINT_SHA256: ${{ needs.reconcile.outputs.fingerprint_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat > production-reconciliation/freeze-comment.md <<EOF
+          ### Frozen Production Infrastructure Fingerprint — run ${GITHUB_RUN_ID}
+
+          - Commit: \`${GITHUB_SHA}\`
+          - SHA-256: \`${FINGERPRINT_SHA256}\`
+          - R2 \`tmg-video-assets-prod\`: **verified**
+          - Vectorize \`tmg-video-segments-512-prod\`: **512d / cosine / 8 governance metadata indexes verified**
+          - Disabled Worker bindings: **verified**
+          - Workflows: **verified**
+          - SQLite \`TenantUsageLedger\` Durable Object namespace: **verified**
+          - Production Readiness replay: **success**
+          - Activation authority: **false**
+          - Public traffic authority: **false**
+          - Run: ${run_url}
+
+          This SHA-256 is the frozen canonical fingerprint of the reconciled disabled production infrastructure. It does not authorize runtime acceptance, public traffic, Marengo promotion, external-provider egress, ingestion execution, MCP, billing, or commercial use.
+          EOF
+          gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file production-reconciliation/freeze-comment.md
+
+      - name: Upload frozen production fingerprint
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-production-fingerprint-${{ github.run_id }}
+          path: production-reconciliation
+          if-no-files-found: error
+          retention-days: 90
