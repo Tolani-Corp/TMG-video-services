@@ -6,6 +6,7 @@
   "publicTrafficAllowed": false,
   "resourcePolicy": {
     "automaticProvisioningAllowed": false,
+    "manualBootstrapMode": "gated_workflow_only",
     "workerName": "tmg-video-services-production",
     "r2Bucket": "tmg-video-assets-prod",
     "vectorIndex": "tmg-video-segments-512-prod",
@@ -19,6 +20,10 @@
       "satisfied": false
     },
     "exactHeadQuality": {
+      "required": true,
+      "satisfied": false
+    },
+    "productionInfrastructureBootstrap": {
       "required": true,
       "satisfied": false
     },

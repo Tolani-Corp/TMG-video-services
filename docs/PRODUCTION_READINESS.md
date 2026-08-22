@@ -1,6 +1,6 @@
 # Production Readiness
 
-The production target is intentionally split into **infrastructure readiness** and **release authority**.
+The production target is intentionally split into **infrastructure bootstrap**, **runtime acceptance**, and **release authority**.
 
 ## Current production state
 
@@ -15,6 +15,8 @@ Expected production resources:
 - Workflow: `tmg-video-revocation-prod`
 - Durable Object: `TenantUsageLedger` through `TENANT_USAGE_LEDGER`
 
+The read-only audit on 2026-08-22 authenticated successfully and proved that the Worker bundle compiles, but the R2 bucket, Vectorize index, and both Workflows do not yet exist.
+
 ## Read-only audit
 
 `.github/workflows/production-readiness.yml` targets the GitHub Environment `production` and performs only read-only Cloudflare queries plus `wrangler deploy --env production --dry-run`.
@@ -27,13 +29,48 @@ The audit verifies:
 4. The expected ingestion and revocation Workflows exist.
 5. Production bindings generate successfully.
 6. The production Worker bundle compiles without a live deploy.
-7. An evidence artifact is emitted for the run.
+7. An evidence artifact and sanitized Issue #18 report are emitted for the run.
 
-The workflow must not create, delete, trigger, deploy, or mutate production resources.
+The readiness workflow must not create, delete, trigger, deploy, or mutate production resources.
 
-## Production mutation gate
+## Manual infrastructure bootstrap
 
-No production resource creation or Worker deployment is authorized until all gates in `config/production-release-policy.json` are evidenced. In particular, GitHub Issue #14 must be closed with repository-protection evidence before production mutation or capability activation.
+`.github/workflows/production-bootstrap.yml` is the only authorized infrastructure-bootstrap path. It is `workflow_dispatch` only and has no push, pull-request, or schedule trigger.
+
+Before any Cloudflare mutation it requires all of the following live evidence:
+
+1. The workflow is dispatched from `main`.
+2. `expected_sha` exactly equals the dispatched `main` SHA.
+3. The caller supplies the exact authorization phrase `BOOTSTRAP_DISABLED_PRODUCTION_INFRASTRUCTURE`.
+4. GitHub reports `main` as protected.
+5. Issue #14 is closed with branch-protection evidence.
+6. The exact SHA has a successful GitHub Actions `validate` check.
+7. The production Cloudflare API token is present and the account is `d20586cf099d39fcbeb5db4043e20f6f`.
+8. Repository checks, production type generation, and production dry-run pass before mutation.
+
+If all gates pass, the workflow may only:
+
+- create `tmg-video-assets-prod` if it does not already exist;
+- create `tmg-video-segments-512-prod` if it does not already exist and verify the 512-dimension/cosine contract;
+- create and verify the eight rights/publication metadata indexes before any vector insertion;
+- deploy the disabled, non-routed `tmg-video-services-production` Worker so the production Workflows and `TenantUsageLedger` Durable Object namespace exist;
+- perform post-bootstrap read-only verification and publish evidence to Issue #18.
+
+The bootstrap workflow must not delete production resources, trigger Workflows, write secrets, publish media, enable ingestion, enable public API/MCP, enable external-provider egress, route traffic, promote Marengo, activate billing, or grant commercial authority.
+
+## Release sequence
+
+The controlled production sequence is:
+
+1. Protect `main` and close Issue #14 with evidence.
+2. Verify exact-head Quality on the intended `main` SHA.
+3. Execute the manual disabled-infrastructure bootstrap.
+4. Bind successful bootstrap evidence to `productionInfrastructureBootstrap`.
+5. Re-run the read-only Production Readiness Audit until all infrastructure checks pass.
+6. Run isolated tenant authentication/isolation, entitlement, quota, and usage-ledger acceptance against the disabled production plane.
+7. Add abuse controls and billing mapping where applicable.
+8. Obtain explicit provider/public/commercial release approval.
+9. Promote individual capabilities separately; do not use infrastructure existence as capability authority.
 
 Even after infrastructure bootstrap, the following remain separate release gates:
 
