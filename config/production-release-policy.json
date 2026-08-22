@@ -25,6 +25,10 @@
     },
     "productionInfrastructureBootstrap": {
       "required": true,
+      "satisfied": true
+    },
+    "productionInfrastructureReconciliation": {
+      "required": true,
       "satisfied": false
     },
     "productionReadinessAudit": {
@@ -38,6 +42,19 @@
     "explicitReleaseApproval": {
       "required": true,
       "satisfied": false
+    }
+  },
+  "evidenceBindings": {
+    "productionInfrastructureBootstrap": {
+      "status": "verified",
+      "runId": "32590468035",
+      "commitSha": "724a6ec5b9f27280a2c3527837702055e3b6d737",
+      "r2": "created",
+      "vectorize": "created",
+      "metadataIndexes": "verified",
+      "disabledWorkerWorkflows": "verified",
+      "activationAuthority": false,
+      "publicTrafficAuthority": false
     }
   },
   "providerAuthority": {
