@@ -39,10 +39,18 @@ if (productionPolicy.activationAllowed !== false || productionPolicy.publicTraff
 if (!/^on:\s*\n\s{2}workflow_dispatch:/m.test(workflow)) {
   failures.push("production bootstrap must expose workflow_dispatch");
 }
+if (!/^\s{2}issue_comment:\s*$/m.test(workflow) || !workflow.includes("types: [created]")) {
+  failures.push("production bootstrap must support created Issue #18 authorization comments");
+}
 for (const trigger of ["push", "pull_request", "schedule"] ) {
   if (new RegExp(`^\\s{2}${trigger}:`, "m").test(workflow)) {
     failures.push(`production bootstrap must not declare automatic trigger ${trigger}`);
   }
+}
+if (!workflow.includes("github.event.issue.number == 18")) failures.push("Issue-comment bootstrap must be restricted to Issue #18");
+if (!workflow.includes("github.actor == 'TolaniCorp'")) failures.push("Issue-comment bootstrap must be restricted to TolaniCorp actor");
+if (!workflow.includes("github.event.comment.body == 'BOOTSTRAP_DISABLED_PRODUCTION_INFRASTRUCTURE'")) {
+  failures.push("Issue-comment bootstrap must require the exact authorization phrase");
 }
 if (!workflow.includes("environment: production")) failures.push("production bootstrap must use GitHub environment production");
 if (!workflow.includes("expected_sha:")) failures.push("production bootstrap must require expected_sha input");
@@ -50,8 +58,8 @@ if (!workflow.includes("authorization:")) failures.push("production bootstrap mu
 if (!workflow.includes("BOOTSTRAP_DISABLED_PRODUCTION_INFRASTRUCTURE")) {
   failures.push("production bootstrap authorization phrase is missing");
 }
-if (!workflow.includes('test "$GITHUB_REF" = "refs/heads/main"')) failures.push("bootstrap must require dispatch from main");
-if (!workflow.includes('test "$EXPECTED_SHA" = "$GITHUB_SHA"')) failures.push("bootstrap must bind expected_sha to dispatched main SHA");
+if (!workflow.includes('test "$GITHUB_REF" = "refs/heads/main"')) failures.push("bootstrap must require execution from main");
+if (!workflow.includes('test "$EXPECTED_SHA" = "$GITHUB_SHA"')) failures.push("bootstrap must bind expected_sha to executing main SHA");
 if (!workflow.includes("repos/${GITHUB_REPOSITORY}/branches/main")) failures.push("bootstrap must verify main branch protection");
 if (!workflow.includes("gh issue view 14")) failures.push("bootstrap must require Issue #14 closure");
 if (!workflow.includes("check-runs?per_page=100")) failures.push("bootstrap must verify exact-head GitHub check evidence");
