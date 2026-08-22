@@ -21,7 +21,7 @@ jobs:
     environment: production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN is missing from GitHub environment production"; exit 1; }
-          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "CLOUDFLARE_ACCOUNT_ID is missing from GitHub environment production"; exit 1; }
+          test "${CLOUDFLARE_ACCOUNT_ID}" = "d20586cf099d39fcbeb5db4043e20f6f" || { echo "Unexpected Cloudflare account ID"; exit 1; }
 
       - name: Validate production policy and bindings
         run: |
@@ -116,46 +116,42 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          AUDIT_JOB_STATUS: ${{ job.status }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p production-audit
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
 
-          read_status() {
-            local name="$1"
-            if [[ -f "production-audit/${name}.status" ]]; then
-              cat "production-audit/${name}.status"
-            else
-              printf 'not-run'
-            fi
-          }
-
-          token_state="missing"
-          account_state="missing"
-          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && token_state="present"
-          [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && account_state="present"
-
-          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          cat > production-audit/issue-comment.md <<EOF
-          ### Production Readiness Audit — run ${GITHUB_RUN_ID}
-
-          - Target: `production`
-          - Commit: `${GITHUB_SHA}`
-          - Job state before reporting: `${{ job.status }}`
-          - Mutation authority: **false**
-          - Activation authority: **false**
-          - Cloudflare API token: **${token_state}**
-          - Cloudflare account ID: **${account_state}**
-          - `whoami`: `$(read_status whoami)`
-          - R2 `tmg-video-assets-prod`: `$(read_status r2_bucket)`
-          - Vectorize `tmg-video-segments-512-prod`: `$(read_status vector_index)`
-          - Workflow `tmg-video-ingestion-prod`: `$(read_status ingestion_workflow)`
-          - Workflow `tmg-video-revocation-prod`: `$(read_status revocation_workflow)`
-          - Production deploy dry-run: `$(read_status deploy_dry_run)`
-          - Run: ${run_url}
-
-          This audit is read-only. A passing result does not authorize production mutation, public traffic, provider promotion, external-provider egress, MCP, billing, or commercial use. Issue #14 and the gates in `config/production-release-policy.json` remain controlling.
-          EOF
+          const readStatus = (name) => fs.existsSync(`production-audit/${name}.status`)
+            ? fs.readFileSync(`production-audit/${name}.status`, "utf8").trim()
+            : "not-run";
+          const present = (value) => value ? "present" : "missing";
+          const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          const body = [
+            `### Production Readiness Audit — run ${process.env.GITHUB_RUN_ID}`,
+            "",
+            "- Target: `production`",
+            `- Commit: \`${process.env.GITHUB_SHA}\``,
+            `- Job state before reporting: \`${process.env.AUDIT_JOB_STATUS ?? "unknown"}\``,
+            "- Mutation authority: **false**",
+            "- Activation authority: **false**",
+            `- Cloudflare API token: **${present(process.env.CLOUDFLARE_API_TOKEN)}**`,
+            `- Cloudflare account ID: **${present(process.env.CLOUDFLARE_ACCOUNT_ID)}**`,
+            `- \`whoami\`: \`${readStatus("whoami")}\``,
+            `- R2 \`tmg-video-assets-prod\`: \`${readStatus("r2_bucket")}\``,
+            `- Vectorize \`tmg-video-segments-512-prod\`: \`${readStatus("vector_index")}\``,
+            `- Workflow \`tmg-video-ingestion-prod\`: \`${readStatus("ingestion_workflow")}\``,
+            `- Workflow \`tmg-video-revocation-prod\`: \`${readStatus("revocation_workflow")}\``,
+            `- Production deploy dry-run: \`${readStatus("deploy_dry_run")}\``,
+            `- Run: ${runUrl}`,
+            "",
+            "This audit is read-only. A passing result does not authorize production mutation, public traffic, provider promotion, external-provider egress, MCP, billing, or commercial use. Issue #14 and the gates in `config/production-release-policy.json` remain controlling.",
+            "",
+          ].join("\n");
+          fs.writeFileSync("production-audit/issue-comment.md", body);
+          NODE
 
           gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file production-audit/issue-comment.md
 
