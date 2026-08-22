@@ -1,0 +1,233 @@
+name: Production Infrastructure Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact main commit SHA already validated by Quality
+        required: true
+        type: string
+      authorization:
+        description: Type BOOTSTRAP_DISABLED_PRODUCTION_INFRASTRUCTURE
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+  issues: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      BOOTSTRAP_AUTHORIZATION: ${{ inputs.authorization }}
+      TMG_PROD_R2_BUCKET: tmg-video-assets-prod
+      TMG_PROD_VECTOR_INDEX: tmg-video-segments-512-prod
+      TMG_PROD_INGEST_WORKFLOW: tmg-video-ingestion-prod
+      TMG_PROD_REVOKE_WORKFLOW: tmg-video-revocation-prod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Enforce production bootstrap governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p production-bootstrap
+
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Production bootstrap must be dispatched from main" >&2
+            exit 2
+          }
+          test "$EXPECTED_SHA" = "$GITHUB_SHA" || {
+            echo "expected_sha must equal the dispatched main SHA" >&2
+            exit 2
+          }
+          test "$BOOTSTRAP_AUTHORIZATION" = "BOOTSTRAP_DISABLED_PRODUCTION_INFRASTRUCTURE" || {
+            echo "Explicit bootstrap authorization phrase is required" >&2
+            exit 2
+          }
+
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          test "$protected" = "true" || {
+            echo "main is not protected; Issue #14 gate is unsatisfied" >&2
+            exit 3
+          }
+
+          issue_state="$(gh issue view 14 --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          test "$issue_state" = "CLOSED" || {
+            echo "Issue #14 must be closed with branch-protection evidence before production bootstrap" >&2
+            exit 3
+          }
+
+          quality_passes="$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/commits/${EXPECTED_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "validate" and .conclusion == "success" and .app.slug == "github-actions")] | length')"
+          test "$quality_passes" -ge 1 || {
+            echo "Exact expected_sha has no successful GitHub Actions validate check" >&2
+            exit 4
+          }
+
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || {
+            echo "CLOUDFLARE_API_TOKEN is missing from GitHub environment production" >&2
+            exit 5
+          }
+          test "$CLOUDFLARE_ACCOUNT_ID" = "d20586cf099d39fcbeb5db4043e20f6f" || {
+            echo "Unexpected Cloudflare account ID" >&2
+            exit 5
+          }
+
+          printf '%s\n' "$EXPECTED_SHA" > production-bootstrap/expected-sha.txt
+          printf 'protected=%s\nissue14=%s\nqualityValidatePasses=%s\n' \
+            "$protected" "$issue_state" "$quality_passes" > production-bootstrap/governance.txt
+
+      - name: Validate exact production candidate before mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm production-release-policy:check
+          pnpm check
+          pnpm cf-typegen:production
+          pnpm typecheck
+          pnpm production:dry-run
+
+      - name: Ensure production R2 bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pnpm exec wrangler r2 bucket info "$TMG_PROD_R2_BUCKET" --json > production-bootstrap/r2.json 2> production-bootstrap/r2-info.err; then
+            echo "existing" > production-bootstrap/r2.status
+          else
+            pnpm exec wrangler r2 bucket create "$TMG_PROD_R2_BUCKET"
+            pnpm exec wrangler r2 bucket info "$TMG_PROD_R2_BUCKET" --json > production-bootstrap/r2.json
+            echo "created" > production-bootstrap/r2.status
+          fi
+
+      - name: Ensure production Vectorize index
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pnpm exec wrangler vectorize get "$TMG_PROD_VECTOR_INDEX" --json > production-bootstrap/vectorize.json 2> production-bootstrap/vectorize-info.err; then
+            echo "existing" > production-bootstrap/vectorize.status
+          else
+            pnpm exec wrangler vectorize create "$TMG_PROD_VECTOR_INDEX" --dimensions 512 --metric cosine
+            pnpm exec wrangler vectorize get "$TMG_PROD_VECTOR_INDEX" --json > production-bootstrap/vectorize.json
+            echo "created" > production-bootstrap/vectorize.status
+          fi
+
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const raw = JSON.parse(fs.readFileSync("production-bootstrap/vectorize.json", "utf8"));
+          const index = raw?.result ?? raw;
+          const dimensions = index?.config?.dimensions;
+          const metric = index?.config?.metric;
+          if (dimensions !== 512 || metric !== "cosine") {
+            throw new Error(`Production Vectorize contract mismatch dimensions=${String(dimensions)} metric=${String(metric)}`);
+          }
+          NODE
+
+      - name: Create and verify production Vectorize metadata indexes
+        env:
+          TMG_ACCEPT_VECTOR_INDEX: tmg-video-segments-512-prod
+          TMG_ACCEPT_METADATA_OUT: production-bootstrap/metadata-indexes.json
+        run: node scripts/ensure-metadata-indexes.mjs
+
+      - name: Deploy disabled non-routed production Worker and Workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --env production | tee production-bootstrap/deploy.txt
+
+      - name: Verify production resources after bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket info "$TMG_PROD_R2_BUCKET" --json > production-bootstrap/r2-post.json
+          pnpm exec wrangler vectorize get "$TMG_PROD_VECTOR_INDEX" --json > production-bootstrap/vectorize-post.json
+          pnpm exec wrangler workflows describe "$TMG_PROD_INGEST_WORKFLOW" > production-bootstrap/ingestion-workflow.txt
+          pnpm exec wrangler workflows describe "$TMG_PROD_REVOKE_WORKFLOW" > production-bootstrap/revocation-workflow.txt
+
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const summary = {
+            schemaVersion: "1.0.0",
+            targetEnvironment: "production",
+            headSha: process.env.GITHUB_SHA,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            mutationAuthority: "bootstrap_only",
+            activationAuthority: false,
+            publicTrafficAuthority: false,
+            r2: fs.readFileSync("production-bootstrap/r2.status", "utf8").trim(),
+            vectorize: fs.readFileSync("production-bootstrap/vectorize.status", "utf8").trim(),
+            metadataIndexesVerified: true,
+            disabledWorkerDeployed: true,
+            workflowsVerified: true,
+            providerAuthority: "fixture_default_marengo_shadow_only"
+          };
+          fs.writeFileSync("production-bootstrap/summary.json", `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+
+      - name: Publish bootstrap outcome to Issue 18
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOOTSTRAP_JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p production-bootstrap
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const read = (path, fallback = "not-reached") => fs.existsSync(path)
+            ? fs.readFileSync(path, "utf8").trim()
+            : fallback;
+          const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          const body = [
+            `### Production Infrastructure Bootstrap — run ${process.env.GITHUB_RUN_ID}`,
+            "",
+            `- Commit: \`${process.env.GITHUB_SHA}\``,
+            `- Status: \`${process.env.BOOTSTRAP_JOB_STATUS ?? "unknown"}\``,
+            `- R2 \`tmg-video-assets-prod\`: \`${read("production-bootstrap/r2.status")}\``,
+            `- Vectorize \`tmg-video-segments-512-prod\`: \`${read("production-bootstrap/vectorize.status")}\``,
+            `- Metadata indexes: \`${fs.existsSync("production-bootstrap/metadata-indexes.json") ? "verified" : "not-reached"}\``,
+            `- Disabled Worker/Workflows verification: \`${fs.existsSync("production-bootstrap/summary.json") ? "verified" : "not-reached"}\``,
+            "- Activation authority: **false**",
+            "- Public traffic authority: **false**",
+            `- Run: ${runUrl}`,
+            "",
+            "This workflow may bootstrap only the disabled production infrastructure after branch protection, Issue #14 closure, exact-head Quality, and explicit dispatch authorization. It does not authorize public traffic, Marengo promotion, external-provider egress, ingestion execution, MCP, billing, or commercial use.",
+            ""
+          ].join("\n");
+          fs.writeFileSync("production-bootstrap/issue-comment.md", body);
+          NODE
+          gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file production-bootstrap/issue-comment.md
+
+      - name: Upload production bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-production-bootstrap-${{ github.run_id }}
+          path: production-bootstrap
+          if-no-files-found: warn
+          retention-days: 90
