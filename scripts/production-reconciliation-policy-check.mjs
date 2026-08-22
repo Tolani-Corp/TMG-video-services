@@ -86,6 +86,12 @@ if (!workflow.includes("workflows describe")) failures.push("reconciliation must
 if (!workflow.includes("wrangler deploy --env production --dry-run")) failures.push("reconciliation must dry-run the production Worker");
 if (!workflow.includes("node scripts/reconcile-production-infrastructure.mjs")) failures.push("reconciliation must execute the canonical reconciler");
 if (!workflow.includes("Candidate fingerprint SHA-256")) failures.push("reconciliation must publish only a candidate fingerprint before readiness replay");
+if (!workflow.includes("if: always()") || !workflow.includes("RECONCILIATION_JOB_STATUS: ${{ job.status }}")) {
+  failures.push("reconciliation must self-report success or failure to Issue #18");
+}
+if (!workflow.includes("Reconciliation did not complete successfully")) {
+  failures.push("reconciliation failure report must explicitly prohibit fingerprint freeze/runtime acceptance");
+}
 if (!workflow.includes("not frozen until an independent Production Readiness replay succeeds")) {
   failures.push("reconciliation must explicitly defer fingerprint freeze until an independent readiness replay");
 }
