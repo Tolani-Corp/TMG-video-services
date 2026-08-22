@@ -2,6 +2,14 @@ name: Production Readiness Audit
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "wrangler.jsonc"
+      - "config/production-release-policy.json"
+      - "scripts/production-release-policy-check.mjs"
+      - ".github/workflows/production-readiness.yml"
 
 permissions:
   contents: read
