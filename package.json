@@ -18,8 +18,9 @@
     "provider-promotion-policy:check": "node scripts/provider-promotion-policy-check.mjs",
     "production-release-policy:check": "node scripts/production-release-policy-check.mjs",
     "production-bootstrap-policy:check": "node scripts/production-bootstrap-policy-check.mjs",
+    "production-reconciliation-policy:check": "node scripts/production-reconciliation-policy-check.mjs",
     "production:dry-run": "wrangler deploy --env production --dry-run --outdir .production-dry-run",
-    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs && node scripts/production-release-policy-check.mjs && node scripts/production-bootstrap-policy-check.mjs",
+    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs && node scripts/production-release-policy-check.mjs && node scripts/production-bootstrap-policy-check.mjs && node scripts/production-reconciliation-policy-check.mjs",
     "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
   },
   "dependencies": {
