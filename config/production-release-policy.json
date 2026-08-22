@@ -55,6 +55,43 @@
       "disabledWorkerWorkflows": "verified",
       "activationAuthority": false,
       "publicTrafficAuthority": false
+    },
+    "productionInfrastructureReconciliation": {
+      "status": "verified",
+      "runId": "32592457936",
+      "commitSha": "6dbd16c2fc9a9fc1fda1db9a9a6640c640de2bd6",
+      "fingerprintSha256": "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c",
+      "r2": "verified",
+      "vectorize": "verified",
+      "metadataIndexes": "verified",
+      "workerBindings": "verified",
+      "workflows": "verified",
+      "durableObjectNamespace": "verified",
+      "mutationAuthority": false,
+      "activationAuthority": false,
+      "publicTrafficAuthority": false
+    },
+    "productionReadinessAudit": {
+      "status": "verified",
+      "runId": "32592545975",
+      "commitSha": "6dbd16c2fc9a9fc1fda1db9a9a6640c640de2bd6",
+      "whoami": "pass",
+      "r2": "pass",
+      "vectorize": "pass",
+      "ingestionWorkflow": "pass",
+      "revocationWorkflow": "pass",
+      "deployDryRun": "pass",
+      "mutationAuthority": false,
+      "activationAuthority": false
+    },
+    "productionInfrastructureFingerprint": {
+      "status": "frozen",
+      "file": "config/production-infrastructure-fingerprint.json",
+      "checksumFile": "config/production-infrastructure-fingerprint.sha256",
+      "sha256": "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c",
+      "sourceCommitSha": "6dbd16c2fc9a9fc1fda1db9a9a6640c640de2bd6",
+      "reconciliationRunId": "32592457936",
+      "readinessRunId": "32592545975"
     }
   },
   "providerAuthority": {
