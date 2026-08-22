@@ -35,6 +35,12 @@ const normalizeBinding = (binding) => {
   }
   return result;
 };
+const normalizeIndexType = (value) => {
+  if (["String", "string"].includes(value)) return "string";
+  if (["Bool", "boolean"].includes(value)) return "boolean";
+  if (["Number", "number"].includes(value)) return "number";
+  return value;
+};
 
 const listCursorArray = async (pathname, perPage = 1000) => {
   const items = [];
@@ -88,7 +94,7 @@ const vectorInfo = (await request(`/accounts/${accountId}/vectorize/v2/indexes/$
 const vectorIds = await listVectorIds();
 const metadataResult = (await request(`/accounts/${accountId}/vectorize/v2/indexes/${expectedVector}/metadata_index/list`)).result;
 const metadataIndexes = (metadataResult?.metadataIndexes ?? [])
-  .map((item) => ({ propertyName: item.propertyName, indexType: String(item.indexType).toLowerCase() }))
+  .map((item) => ({ propertyName: item.propertyName, indexType: normalizeIndexType(item.indexType) }))
   .sort((a, b) => a.propertyName.localeCompare(b.propertyName));
 
 const workerSettings = (await request(`/accounts/${accountId}/workers/scripts/${expectedWorker}/settings`)).result;
