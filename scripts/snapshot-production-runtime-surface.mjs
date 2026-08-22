@@ -102,10 +102,9 @@ const workerSubdomain = (await request(`/accounts/${accountId}/workers/scripts/$
 const bindings = (workerSettings.bindings ?? []).map(normalizeBinding).sort((a, b) => a.name.localeCompare(b.name));
 const expectedBindingNames = new Set((frozen.resources?.worker?.bindings ?? []).map((binding) => binding.name));
 const governedBindings = bindings.filter((binding) => expectedBindingNames.has(binding.name));
-const expectedRuntimeNames = Object.keys(frozen.resources?.worker?.runtimeFlags ?? {});
-const runtimeFlags = Object.fromEntries(
-  bindings.filter((binding) => expectedRuntimeNames.includes(binding.name)).map((binding) => [binding.name, binding.text]),
-);
+const expectedRuntimeNames = Object.keys(frozen.resources?.worker?.runtimeFlags ?? {}).sort();
+const bindingByName = new Map(bindings.map((binding) => [binding.name, binding]));
+const runtimeFlags = Object.fromEntries(expectedRuntimeNames.map((name) => [name, bindingByName.get(name)?.text]));
 
 const namespaces = (await request(`/accounts/${accountId}/workers/durable_objects/namespaces?per_page=1000`)).result ?? [];
 const ledgerNamespaces = namespaces.filter((item) => item.class === "TenantUsageLedger" && item.script === expectedWorker);
@@ -201,7 +200,13 @@ if (JSON.stringify(state.vectorize.metadataIndexes) !== JSON.stringify(frozen.re
 if (JSON.stringify(state.productionWorker.bindings) !== JSON.stringify(frozenWorker.bindings ?? [])) {
   throw new Error("live production Worker resource bindings do not match frozen fingerprint");
 }
-if (JSON.stringify(state.productionWorker.runtimeFlags) !== JSON.stringify(frozenWorker.runtimeFlags ?? {})) {
+const frozenRuntimeFlags = frozenWorker.runtimeFlags ?? {};
+const liveRuntimeFlagKeys = Object.keys(state.productionWorker.runtimeFlags).sort();
+const frozenRuntimeFlagKeys = Object.keys(frozenRuntimeFlags).sort();
+if (
+  JSON.stringify(liveRuntimeFlagKeys) !== JSON.stringify(frozenRuntimeFlagKeys) ||
+  frozenRuntimeFlagKeys.some((name) => state.productionWorker.runtimeFlags[name] !== frozenRuntimeFlags[name])
+) {
   throw new Error("live production Worker runtime flags do not match frozen fingerprint");
 }
 if (state.productionWorker.workersDevEnabled || state.productionWorker.previewUrlsEnabled) {
