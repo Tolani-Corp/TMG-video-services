@@ -125,6 +125,12 @@ if (publicContext.publicStatus !== "G0") failures.push("public product context m
 
 if (!workflow.includes("environment: production")) failures.push("production readiness workflow must use GitHub environment production");
 if (!workflow.includes("wrangler deploy --env production --dry-run")) failures.push("production readiness workflow must compile with deploy --dry-run");
+if (!workflow.includes("CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f")) {
+  failures.push("production readiness workflow must use the proven TMG Cloudflare account ID");
+}
+if (workflow.includes("CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}")) {
+  failures.push("Cloudflare account ID is non-secret repository configuration and must not depend on a missing production secret");
+}
 if (!workflow.includes("issues: write")) failures.push("production readiness workflow must be able to publish sanitized audit evidence to Issue #18");
 if (!workflow.includes("gh issue comment 18")) failures.push("production readiness workflow must self-report sanitized results to Issue #18");
 for (const forbidden of [
