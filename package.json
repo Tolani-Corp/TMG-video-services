@@ -8,6 +8,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
+    "cf-typegen:production": "wrangler types --env production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "fixture:verify": "node scripts/verify-fixture.mjs",
@@ -15,7 +16,9 @@
     "temporal-segment-policy:check": "node scripts/temporal-segment-policy-check.mjs",
     "derived-rights-cascade-policy:check": "node scripts/derived-rights-cascade-policy-check.mjs",
     "provider-promotion-policy:check": "node scripts/provider-promotion-policy-check.mjs",
-    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs",
+    "production-release-policy:check": "node scripts/production-release-policy-check.mjs",
+    "production:dry-run": "wrangler deploy --env production --dry-run --outdir .production-dry-run",
+    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs && node scripts/production-release-policy-check.mjs",
     "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
   },
   "dependencies": {
