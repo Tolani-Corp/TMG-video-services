@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0.0",
+  "targetEnvironment": "production",
+  "targetScope": "live_production_namespace",
+  "issue": 29,
+  "authorizationPhrase": "RUN_LIVE_PRODUCTION_RUNTIME_ACCEPTANCE_V1",
+  "frozenFingerprintSha256": "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c",
+  "frozenSourceCommitSha": "6dbd16c2fc9a9fc1fda1db9a9a6640c640de2bd6",
+  "productionWorker": "tmg-video-services-production",
+  "durableObjectClass": "TenantUsageLedger",
+  "durableObjectNamespaceId": "737c0b2361c2407ba3c765bcb269504f",
+  "acceptanceTenantId": "prod_acceptance_fixture_v1",
+  "acceptanceObjectPrefix": "prod_acceptance_fixture_v1",
+  "providerId": "fixture",
+  "providerAuthority": "fixture",
+  "purpose": "internal_search",
+  "billingDisposition": "development_non_billable",
+  "commercialReleaseApproved": false,
+  "authority": {
+    "publicApi": false,
+    "mcp": false,
+    "ingestion": false,
+    "externalProviderEgress": false,
+    "providerPromotion": false,
+    "billing": false,
+    "commercialUse": false,
+    "publicTraffic": false
+  },
+  "harness": {
+    "mode": "wrangler_dev_remote",
+    "workerName": "tmg-video-runtime-acceptance",
+    "workersDev": false,
+    "previewUrls": false,
+    "persistentDeployAllowed": false,
+    "customRoutesAllowed": false,
+    "customDomainsAllowed": false,
+    "r2BindingAllowed": false,
+    "vectorizeBindingAllowed": false,
+    "workflowBindingAllowed": false
+  }
+}
