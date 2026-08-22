@@ -35,8 +35,8 @@ const bootstrapGate = productionPolicy.requiredGates?.productionInfrastructureBo
 const reconciliationGate = productionPolicy.requiredGates?.productionInfrastructureReconciliation;
 const bootstrapEvidence = productionPolicy.evidenceBindings?.productionInfrastructureBootstrap;
 
-if (bootstrapGate?.required !== true || bootstrapGate?.satisfied !== true) {
-  failures.push("productionInfrastructureBootstrap must be evidence-bound and satisfied before reconciliation");
+if (bootstrapGate?.required !== true || bootstrapGate?.satisfied !== false) {
+  failures.push("productionInfrastructureBootstrap must remain fail-closed in release policy until the reconciled fingerprint is bound");
 }
 if (bootstrapEvidence?.status !== "verified") failures.push("successful production bootstrap evidence must be bound");
 if (bootstrapEvidence?.runId !== "32590468035") failures.push("bootstrap evidence must bind run 32590468035");
@@ -44,7 +44,7 @@ if (bootstrapEvidence?.commitSha !== "724a6ec5b9f27280a2c3527837702055e3b6d737")
   failures.push("bootstrap evidence must bind the verified bootstrap commit");
 }
 if (reconciliationGate?.required !== true || reconciliationGate?.satisfied !== false) {
-  failures.push("productionInfrastructureReconciliation must remain required and unsatisfied until live reconciliation evidence is frozen");
+  failures.push("productionInfrastructureReconciliation must remain required and unsatisfied until the fingerprint is repository-bound");
 }
 if (productionPolicy.activationAllowed !== false || productionPolicy.publicTrafficAllowed !== false) {
   failures.push("production activation/public traffic must remain disabled during reconciliation");
@@ -85,10 +85,13 @@ if (!workflow.includes("vectorize get")) failures.push("reconciliation must insp
 if (!workflow.includes("workflows describe")) failures.push("reconciliation must inspect Workflows read-only");
 if (!workflow.includes("wrangler deploy --env production --dry-run")) failures.push("reconciliation must dry-run the production Worker");
 if (!workflow.includes("node scripts/reconcile-production-infrastructure.mjs")) failures.push("reconciliation must execute the canonical reconciler");
-if (!workflow.includes("uses: ./.github/workflows/production-readiness.yml")) failures.push("reconciliation must rerun Production Readiness before freezing");
-if (!workflow.includes("sha256sum production-reconciliation/infrastructure-fingerprint.json")) failures.push("freeze stage must independently verify fingerprint SHA-256");
-if (!workflow.includes("Frozen Production Infrastructure Fingerprint")) failures.push("reconciliation must publish the frozen digest to Issue #18");
-if (!readinessWorkflow.includes("workflow_call:")) failures.push("Production Readiness must be reusable by reconciliation");
+if (!workflow.includes("Candidate fingerprint SHA-256")) failures.push("reconciliation must publish only a candidate fingerprint before readiness replay");
+if (!workflow.includes("not frozen until an independent Production Readiness replay succeeds")) {
+  failures.push("reconciliation must explicitly defer fingerprint freeze until an independent readiness replay");
+}
+if (!readinessWorkflow.includes("RUN_READ_ONLY_PRODUCTION_READINESS")) {
+  failures.push("Production Readiness must expose the separate Issue #18 authorization path used after reconciliation");
+}
 
 for (const requiredRead of [
   "/vectorize/v2/indexes/${expected.vectorIndex}/metadata_index/list",
