@@ -146,33 +146,46 @@ jobs:
           set -euo pipefail
           node scripts/reconcile-production-infrastructure.mjs
 
-      - name: Publish reconciliation candidate to Issue 18
-        if: success()
+      - name: Publish reconciliation outcome to Issue 18
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          RECONCILIATION_JOB_STATUS: ${{ job.status }}
         shell: bash
         run: |
           set -euo pipefail
-          sha256="$(awk '{print $1}' production-reconciliation/infrastructure-fingerprint.sha256)"
-          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          cat > production-reconciliation/issue-comment.md <<EOF
-          ### Production Infrastructure Reconciliation — run ${GITHUB_RUN_ID}
-
-          - Commit: \`${GITHUB_SHA}\`
-          - Status: \`success\`
-          - Candidate fingerprint SHA-256: \`${sha256}\`
-          - R2 \`tmg-video-assets-prod\`: **verified**
-          - Vectorize \`tmg-video-segments-512-prod\`: **512d / cosine / 8 governance metadata indexes verified**
-          - Disabled Worker bindings: **verified**
-          - Workflows: **verified**
-          - SQLite \`TenantUsageLedger\` Durable Object namespace: **verified**
-          - Mutation authority: **false**
-          - Activation authority: **false**
-          - Public traffic authority: **false**
-          - Run: ${run_url}
-
-          This is a candidate infrastructure fingerprint only. It is not frozen until an independent Production Readiness replay succeeds and the digest is bound back into the repository through a reviewed change. Runtime acceptance remains prohibited.
-          EOF
+          mkdir -p production-reconciliation
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const exists = (file) => fs.existsSync(`production-reconciliation/${file}`);
+          const fingerprint = exists("infrastructure-fingerprint.sha256")
+            ? fs.readFileSync("production-reconciliation/infrastructure-fingerprint.sha256", "utf8").trim().split(/\s+/)[0]
+            : "not-reached";
+          const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          const ok = process.env.RECONCILIATION_JOB_STATUS === "success";
+          const body = [
+            `### Production Infrastructure Reconciliation — run ${process.env.GITHUB_RUN_ID}`,
+            "",
+            `- Commit: \`${process.env.GITHUB_SHA}\``,
+            `- Status: \`${process.env.RECONCILIATION_JOB_STATUS ?? "unknown"}\``,
+            `- Candidate fingerprint SHA-256: \`${fingerprint}\``,
+            `- Governance evidence: **${exists("governance.txt") ? "recorded" : "not-reached"}**`,
+            `- R2 \`tmg-video-assets-prod\`: **${exists("r2.json") ? "observed" : "not-reached"}**`,
+            `- Vectorize \`tmg-video-segments-512-prod\`: **${exists("vectorize.json") ? "observed" : "not-reached"}**`,
+            `- Workflows: **${exists("ingestion-workflow.txt") && exists("revocation-workflow.txt") ? "observed" : "not-reached"}**`,
+            `- Full reconciliation contract: **${exists("reconciliation-summary.json") ? "verified" : "not-reached"}**`,
+            "- Mutation authority: **false**",
+            "- Activation authority: **false**",
+            "- Public traffic authority: **false**",
+            `- Run: ${runUrl}`,
+            "",
+            ok
+              ? "This is a candidate infrastructure fingerprint only. It is not frozen until an independent Production Readiness replay succeeds and the digest is bound back into the repository through a reviewed change. Runtime acceptance remains prohibited."
+              : "Reconciliation did not complete successfully. No fingerprint is frozen and runtime acceptance remains prohibited. Inspect the run evidence/logs before retrying.",
+            "",
+          ].join("\n");
+          fs.writeFileSync("production-reconciliation/issue-comment.md", body);
+          NODE
           gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file production-reconciliation/issue-comment.md
 
       - name: Upload production reconciliation evidence
