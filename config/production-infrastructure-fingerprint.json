@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "1.0.0",
+  "targetEnvironment": "production",
+  "cloudflareAccountId": "d20586cf099d39fcbeb5db4043e20f6f",
+  "sourceCommitSha": "6dbd16c2fc9a9fc1fda1db9a9a6640c640de2bd6",
+  "resources": {
+    "r2": {
+      "name": "tmg-video-assets-prod",
+      "jurisdiction": null,
+      "storageClass": null
+    },
+    "vectorize": {
+      "name": "tmg-video-segments-512-prod",
+      "id": null,
+      "dimensions": 512,
+      "metric": "cosine",
+      "metadataIndexes": [
+        {
+          "propertyName": "advertising",
+          "indexType": "boolean"
+        },
+        {
+          "propertyName": "datasetExport",
+          "indexType": "boolean"
+        },
+        {
+          "propertyName": "externalApi",
+          "indexType": "boolean"
+        },
+        {
+          "propertyName": "licensing",
+          "indexType": "boolean"
+        },
+        {
+          "propertyName": "mcp",
+          "indexType": "boolean"
+        },
+        {
+          "propertyName": "publicationState",
+          "indexType": "string"
+        },
+        {
+          "propertyName": "rightsVerified",
+          "indexType": "boolean"
+        },
+        {
+          "propertyName": "tenantId",
+          "indexType": "string"
+        }
+      ]
+    },
+    "worker": {
+      "name": "tmg-video-services-production",
+      "compatibilityDate": "2026-08-20",
+      "mainModule": null,
+      "bindings": [
+        {
+          "name": "INGEST_WORKFLOW",
+          "type": "workflow",
+          "class_name": "IngestionWorkflow",
+          "workflow_name": "tmg-video-ingestion-prod"
+        },
+        {
+          "name": "MEDIA_BUCKET",
+          "type": "r2_bucket",
+          "bucket_name": "tmg-video-assets-prod"
+        },
+        {
+          "name": "REVOKE_WORKFLOW",
+          "type": "workflow",
+          "class_name": "RevocationWorkflow",
+          "workflow_name": "tmg-video-revocation-prod"
+        },
+        {
+          "name": "TENANT_USAGE_LEDGER",
+          "type": "durable_object_namespace",
+          "namespace_id": "737c0b2361c2407ba3c765bcb269504f",
+          "class_name": "TenantUsageLedger"
+        },
+        {
+          "name": "VIDEO_INDEX",
+          "type": "vectorize",
+          "index_name": "tmg-video-segments-512-prod"
+        }
+      ],
+      "runtimeFlags": {
+        "TMG_PUBLIC_API_ENABLED": "false",
+        "TMG_MCP_ENABLED": "false",
+        "TMG_INGEST_WORKFLOW_ENABLED": "false",
+        "TMG_INGESTION_MODE": "fixture_only",
+        "TMG_POLICY_VERSION": "2026-08-20.v3",
+        "TMG_EMBEDDING_DIMENSIONS": "512",
+        "TMG_EMBEDDING_PROVIDER_ID": "fixture",
+        "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
+        "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified",
+        "TMG_TENANT_USAGE_LEDGER_ENABLED": "false"
+      }
+    },
+    "workflows": [
+      {
+        "name": "tmg-video-ingestion-prod",
+        "className": "IngestionWorkflow"
+      },
+      {
+        "name": "tmg-video-revocation-prod",
+        "className": "RevocationWorkflow"
+      }
+    ],
+    "durableObjectNamespace": {
+      "id": "737c0b2361c2407ba3c765bcb269504f",
+      "name": "tmg-video-services-production_TenantUsageLedger",
+      "className": "TenantUsageLedger",
+      "script": "tmg-video-services-production",
+      "useSqlite": true
+    }
+  },
+  "authorities": {
+    "activation": false,
+    "publicTraffic": false,
+    "externalProviderEgress": false,
+    "ingestionExecution": false,
+    "mcp": false,
+    "billing": false,
+    "commercialUse": false
+  }
+}
