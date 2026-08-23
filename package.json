@@ -24,8 +24,9 @@
     "production-runtime-acceptance-evidence:check": "node scripts/production-runtime-acceptance-evidence-check.mjs",
     "production-tenant-auth-acceptance-policy:check": "node scripts/production-tenant-auth-acceptance-policy-check.mjs",
     "production-tenant-auth-acceptance-evidence:check": "node scripts/production-tenant-auth-acceptance-evidence-check.mjs",
+    "production-release-authority-policy:check": "node scripts/production-release-authority-policy-check.mjs",
     "production:dry-run": "wrangler deploy --env production --dry-run --outdir .production-dry-run",
-    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs && node scripts/production-release-policy-check.mjs && node scripts/production-bootstrap-policy-check.mjs && node scripts/production-reconciliation-policy-check.mjs && node scripts/production-fingerprint-policy-check.mjs && pnpm production-runtime-acceptance-policy:check && pnpm production-runtime-acceptance-evidence:check && pnpm production-tenant-auth-acceptance-policy:check && pnpm production-tenant-auth-acceptance-evidence:check",
+    "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs && node scripts/production-release-policy-check.mjs && node scripts/production-bootstrap-policy-check.mjs && node scripts/production-reconciliation-policy-check.mjs && node scripts/production-fingerprint-policy-check.mjs && pnpm production-runtime-acceptance-policy:check && pnpm production-runtime-acceptance-evidence:check && pnpm production-tenant-auth-acceptance-policy:check && pnpm production-tenant-auth-acceptance-evidence:check && pnpm production-release-authority-policy:check",
     "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
   },
   "dependencies": {
