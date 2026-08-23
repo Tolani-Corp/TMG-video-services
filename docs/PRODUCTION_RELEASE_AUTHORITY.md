@@ -2,222 +2,126 @@
 
 ## Status
 
-This document is a **design-only release authority contract**. It does not authorize production traffic, deployment mutation, route mutation, public API, MCP, ingestion, external-provider egress, provider promotion, billing, or commercial use.
+Release-control mechanics are implemented for **S0 and S1 only** and remain **unactivated**. Controlling design: Issue #40. Implementation: Issue #42.
 
-Controlling design issue: #40.
+The implementation does not authorize production traffic, public API, MCP, ingestion, external-provider egress, provider promotion, billing, commercial use, or S2+ rollout. The repository remains default-deny and the production runtime flags remain false/unverified.
 
-Authoritative design starting point:
+## First capability
 
-- protected main: `4e62a9f042bb18110d954b37e4bcf7b4c3958e46`
-- frozen infrastructure fingerprint: `feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c`
-- live Runtime Acceptance v1: `32606309623`
-- live Tenant Authentication + Entitlement Acceptance v1: `32618053032`
-- independent post-auth Production Readiness: `32618129969`
-- auth evidence binding PR: #39
-- post-binding Quality: `32618364782`
-- post-binding Production Readiness: `32618364793`
+The only capability named by Release Authority v1 is `tenant_authenticated_vector_search_canary_v1` with these immutable boundaries:
 
-Acceptance evidence is necessary but **not sufficient** for release authority.
+- purpose: `internal_search`;
+- tenant cohort: `production_canary_v1`;
+- provider: `fixture` only;
+- maximum provider authority: `fixture`;
+- Marengo: `shadow_only`;
+- billing: non-billable;
+- general public API: false;
+- MCP: false;
+- ingestion: false;
+- external-provider egress: false;
+- commercial use: false.
 
-## Release principle
+S0/S1 do **not** expose the tenant capability to normal users. S1 is operator smoke only.
 
-Production release is capability-scoped, stage-scoped, tenant-scoped, evidence-bound, and human-approved.
+## Implemented artifacts
 
-The following events never grant authority on their own:
+- `.github/workflows/production-release-s0-s1.yml` — manual protected-main release workflow.
+- `config/production-release-manifest.schema.json` — immutable release-manifest contract.
+- `scripts/build-production-release-manifest.mjs` — deterministic manifest builder using write-once files.
+- `config/production-stage-approval.schema.json` — exact S1 approval envelope.
+- `scripts/verify-production-stage-approval.mjs` — human-author, expiration, exact-binding, and replay checks.
+- `config/wrangler.production-s1-canary-ingress.jsonc` — route-less ephemeral ingress with one Service Binding to `tmg-video-services-production`.
+- `scripts/production-release-s1-canary-ingress.mjs` — operator-only smoke proxy using Cloudflare Worker version override.
+- `scripts/extract-production-lkg-version.mjs` — last-known-good capture.
+- `scripts/verify-production-s1-deployment.mjs` — exact `candidate@0% / LKG@100%` verification.
+- `scripts/snapshot-production-runtime-surface.mjs` and `scripts/compare-production-runtime-surfaces.mjs` — governed-surface reconciliation.
 
-- infrastructure existence;
-- a successful acceptance suite;
-- a successful Worker upload or deployment;
-- a successful Production Readiness audit;
-- a previously approved stage;
-- a previous release approval for another SHA, version, capability, tenant cohort, or stage.
+## S0 — prepared candidate, no active-deployment change
 
-Default decision is deny.
+S0 requires a manual workflow dispatch from protected `main`, exact successful Quality, closed prerequisite issues, frozen fingerprint match, and the authorization phrase `PREPARE_TMG_PRODUCTION_S0_V1`.
 
-## First eligible capability
+S0 then:
 
-The first production capability is intentionally smaller than a public launch:
+1. captures the current single 100% last-known-good Worker version;
+2. uploads a new Worker version with `wrangler versions upload`;
+3. resolves the exact new version ID by its unique tag;
+4. builds the immutable release manifest and SHA-256;
+5. proves the active deployment is still the same single last-known-good version at 100%;
+6. proves governed production surfaces have no unexpected delta;
+7. reruns read-only production readiness checks;
+8. publishes an evidence artifact.
 
-**`tenant_authenticated_vector_search_canary_v1`**
+Uploading a version is not S1 approval and does not route normal production traffic to the candidate.
 
-It is constrained to:
+## S1 — operator smoke, candidate at 0% normal traffic
 
-- authenticated production identities only;
-- explicit allowlisted canary tenants only;
-- canonical tenant binding with no caller-controlled tenant override;
-- `internal_search` purpose only;
-- fixture provider only;
-- fixture maximum provider authority only;
-- non-billable operation;
-- no general public API authority;
-- no MCP authority;
-- no ingestion authority;
-- no external-provider egress;
-- no Marengo promotion;
-- no commercial-use authority.
+S1 is not authorized by merging the implementation or by completing S0. A separate human-authored approval is required.
 
-A separate canary ingress must be designed and reviewed before this capability can be exercised. The first canary must **not** be implemented by simply setting `TMG_PUBLIC_API_ENABLED=true`.
+The workflow reconstructs the S0 manifest from the exact candidate SHA, candidate Worker version ID, last-known-good version ID, and original S0 run ID. Its SHA-256 must equal the S0 artifact digest.
 
-## Canary stages
+Only then may S1 validate a human approval and create the deployment composition:
 
-### S0 — Prepared / zero authority
+- candidate version: **0% normal traffic**;
+- last-known-good version: **100% normal traffic**.
 
-The candidate may be built, tested, packaged, fingerprinted, and uploaded as an artifact. No production route, deployment, or traffic mutation is authorized.
+The S1 operator smoke runs through an ephemeral remote-development Worker with no route, no custom domain, workers.dev disabled, preview URLs disabled, and exactly one Service Binding to the production Worker. It forwards only a health probe to the candidate using `Cloudflare-Workers-Version-Overrides` and verifies the candidate still reports G0, public API disabled, and MCP disabled.
 
-### S1 — Operator smoke / 0% normal traffic
+The ephemeral ingress is stopped before post-stage surface reconciliation.
 
-After a separate canary ingress has been reviewed, a new Worker version may be represented in a split deployment at 0% normal traffic. Authorized operator smoke requests may explicitly target that version. Normal users receive no canary traffic.
+## Human S1 approval format
 
-### S2 — Allowlisted canary / <=1%
+The approval must be a human-authored comment on a **separate open release issue**, never Issue #42. The body must be exactly the prefix followed by a single JSON object:
 
-At most one percent deployment share. Only eligible, authenticated, explicitly allowlisted canary tenants may exercise the named capability. All other capability attempts fail closed.
+```text
+APPROVE_TMG_RELEASE_STAGE_V1 {"schemaVersion":"1.0.0","approvalId":"<unique-id>","humanAuthor":"<github-login>","automationAuthored":false,"protectedMainSha":"<40-char-sha>","workerVersionId":"<candidate-version-id>","releaseManifestSha256":"<64-char-sha256>","capabilityId":"tenant_authenticated_vector_search_canary_v1","stageId":"S1","tenantCohortId":"production_canary_v1","issuedAt":"<ISO-8601>","notAfter":"<ISO-8601 <= 30 minutes later>","noOtherCapabilityAuthorized":true}
+```
 
-### S3 — Expanded canary / <=5%
+The verifier rejects:
 
-At most five percent deployment share. Requires a new stage-specific human approval and green evidence from S2.
+- bot/automation authors;
+- author mismatch;
+- wrong SHA/version/manifest/capability/cohort/stage;
+- approvals broader than the named capability;
+- expired or future-dated approvals;
+- validity windows longer than 30 minutes;
+- an `approvalId` already recorded in a `CONSUMED_TMG_RELEASE_APPROVAL_V1` receipt.
 
-### S4 — Controlled production / <=25%
+A successful S1 run records a consumption receipt on the release issue. Automation validates and consumes approval; it does not create approval.
 
-At most twenty-five percent deployment share. Still allowlisted, fixture-only, non-billable, and non-public. Requires a new stage-specific human approval and green evidence from S3.
+## Rollback and kill switch
 
-### S5 — Full Worker version / capability still scoped
+If any S1 step fails after the split deployment is created, the workflow invokes `wrangler rollback <last-known-good-version>` with a deterministic rollback message. The selected last-known-good version becomes the active deployment at 100%.
 
-The candidate Worker version may reach 100% of Worker-version deployment only after all prior stages are green. This does **not** mean public launch. Tenant allowlisting, fixture-only provider authority, non-billable operation, and all capability gates remain in force.
+After rollback the workflow captures deployment state, production surface evidence, and a production deploy dry-run.
 
-## Stage-transition evidence
+Worker rollback is not storage rollback. Therefore S0/S1 prohibit Durable Object lifecycle/schema migrations and destructive R2/Vectorize changes. Any future storage migration requires its own compatibility and recovery gate.
 
-Every stage transition after S0 must be bound to:
+## Post-stage reconciliation
 
-1. exact protected-main SHA;
-2. exact Cloudflare Worker version ID;
-3. immutable release-manifest SHA-256;
-4. successful exact-head Quality;
-5. successful live Production Readiness;
-6. zero unexpected production infrastructure/runtime delta;
-7. successful evidence from the immediately preceding stage;
-8. a one-time human approval for the exact capability and stage;
-9. a recorded last-known-good Worker version for rollback;
-10. proof that the v1 candidate contains no Durable Object lifecycle/schema migration or destructive storage/index migration.
+S0 and S1 require:
 
-No stage approval may be inherited by another stage.
+- before/after production surface snapshots;
+- zero unexpected changes to Worker bindings/runtime flags, R2, Vectorize, Workflows, Durable Object namespace, routes/domains, or persistent acceptance/canary scripts;
+- Cloudflare identity check;
+- R2 read;
+- Vectorize read;
+- ingestion/revocation Workflow reads;
+- production `wrangler deploy --dry-run`.
 
-## Health and abort guardrails
+S1 is successful only if the deployment remains candidate 0% / LKG 100%, operator smoke passes, governed surfaces reconcile, and readiness remains green.
 
-The following are immediate hard-stop conditions:
+## Not implemented / not authorized
 
-- authentication bypass;
-- tenant crossover or cross-tenant data exposure;
-- entitlement bypass;
-- denied operation causing a governed side effect;
-- rights/publication boundary violation;
-- quota or usage-ledger corruption;
-- unexpected Worker route, binding, Workflow, R2, or Vectorize delta;
-- unauthorized provider activity;
-- unauthorized billing or invoiceable event;
-- unauthorized commercial capability.
+S2, S3, S4, and S5 execution paths do not exist in the v1 workflow. The workflow contains no 1%, 5%, or 25% rollout action.
 
-Operational soft guardrails for the first canary include:
+Still blocked:
 
-- rollback if the candidate's relevant 5xx rate reaches 2% for the release observation window;
-- rollback if accepted request latency reaches 2.5x the accepted baseline without an explained, approved cause;
-- zero tolerance for tenant isolation, rights, authorization, or billing violations.
+- allowlisted tenant traffic at S2;
+- public API and MCP until abuse controls are accepted;
+- external-provider promotion and egress;
+- billing mapping and invoiceable events;
+- commercial release;
+- any storage/schema migration coupled to release.
 
-A future release manifest must define the exact observation window and accepted baseline used for that release. Those values are release evidence, not implied by this design document.
-
-## Kill switch and rollback order
-
-The emergency stop sequence is:
-
-1. fail the named capability closed at the application/policy layer;
-2. revoke canary tenant eligibility and affected credentials;
-3. deny or remove the canary ingress, as applicable;
-4. roll Worker traffic to the recorded last-known-good version at 100%;
-5. execute read-only reconciliation and Production Readiness;
-6. publish a sanitized rollback evidence package.
-
-Rollback is not equivalent to storage rollback. Worker versions do not snapshot R2, Vectorize, or Durable Object state. For that reason, Release Authority v1 prohibits Durable Object lifecycle/schema migrations and destructive storage/index changes in the first activation candidate. Any future storage migration requires its own forward/backward compatibility, recovery, and rollback gate.
-
-## Tenant eligibility
-
-A tenant is ineligible unless all conditions are satisfied:
-
-- production identity enabled;
-- credential cryptographically authenticated;
-- canonical tenant mapping verified;
-- explicit `production_canary_v1` cohort membership;
-- default-deny entitlement resolves to allow only for the named capability;
-- approved purpose is `internal_search`;
-- provider is `fixture` with maximum authority `fixture`;
-- persistent quota policy exists;
-- relevant source/media rights policy is satisfied;
-- no unresolved isolation, replay, or abuse finding;
-- billing mode is non-billable;
-- tenant is not represented as generally commercially available.
-
-Canary membership is revocable and never implied by account existence.
-
-## Provider authority
-
-Release Authority v1 does not promote an external provider.
-
-- authoritative provider: `fixture`
-- Marengo: `shadow_only`
-- external-provider egress: false
-- authoritative external embedding: false
-- external-provider commercial claims: false
-
-Any external-provider promotion requires separate provider acceptance, rights/privacy/cost review, and explicit promotion approval.
-
-## Abuse, billing, and commercial gates
-
-Public API and MCP release remain blocked until abuse controls are implemented and accepted.
-
-Commercial release remains blocked until all of the following are separately reviewed and green:
-
-- abuse controls;
-- billing mapping;
-- usage-to-invoice reconciliation;
-- dispute/refund semantics;
-- explicit commercial release approval.
-
-The first canary is non-billable. Usage telemetry may be recorded for governance, but it must not become an invoiceable event.
-
-## Human release approval
-
-Automation may collect evidence, build manifests, verify fingerprints, and execute pre-approved deterministic checks. Automation may **not** grant release authority.
-
-Every stage approval must be human-authored, one-time, non-replayable, and bound to all of:
-
-- protected-main SHA;
-- Worker version ID;
-- release-manifest SHA-256;
-- capability ID;
-- stage ID;
-- tenant cohort ID;
-- not-after bound;
-- explicit statement that no other capability is authorized.
-
-The implementation workflow must reject stale approvals, replayed approvals, approvals for broader capabilities, approvals for a different SHA/version/manifest, and automation-authored approvals.
-
-## Cloudflare release mechanics
-
-The implementation should use versioned Worker release mechanics rather than `wrangler deploy` directly to 100% traffic. The intended sequence is upload version -> establish controlled deployment -> use 0%/low-percentage canary stages -> promote only with evidence -> rollback to the recorded stable version when required.
-
-Because Durable Objects can be pinned to Worker versions differently from ordinary request traffic, release evidence must inspect Durable Object behavior and actual observed traffic, not only configured percentages.
-
-## What remains to implement
-
-This design does not provide a release workflow. A later implementation must add, in a separate reviewed increment:
-
-- a dedicated release-manifest schema;
-- a production release workflow with exact-SHA/version/manifest validation;
-- a separately reviewed canary ingress;
-- human stage-approval parsing and replay protection;
-- last-known-good version capture;
-- kill-switch and rollback commands;
-- stage evidence packaging;
-- post-stage reconciliation/readiness;
-- abuse-control acceptance before public API/MCP;
-- billing mapping before any commercial release.
-
-Until those artifacts exist and are separately accepted, production remains in the disabled envelope.
+A successful S0 or S1 run never implies authority for any of those capabilities.
