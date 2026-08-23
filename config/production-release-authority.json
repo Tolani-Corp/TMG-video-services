@@ -1,0 +1,216 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "design_only",
+  "issue": 40,
+  "sourceMainSha": "4e62a9f042bb18110d954b37e4bcf7b4c3958e46",
+  "frozenInfrastructureFingerprintSha256": "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c",
+  "authority": {
+    "activationAuthorized": false,
+    "deploymentMutationAuthorized": false,
+    "routeMutationAuthorized": false,
+    "publicTrafficAuthorized": false,
+    "publicApiAuthorized": false,
+    "mcpAuthorized": false,
+    "ingestionAuthorized": false,
+    "productionLedgerRuntimeAuthorized": false,
+    "externalProviderEgressAuthorized": false,
+    "providerPromotionAuthorized": false,
+    "billingAuthorized": false,
+    "commercialUseAuthorized": false
+  },
+  "releaseModel": {
+    "type": "capability_scoped_human_approved",
+    "defaultDecision": "deny",
+    "infrastructureExistenceGrantsAuthority": false,
+    "acceptanceEvidenceGrantsAuthority": false,
+    "successfulDeploymentGrantsAuthority": false,
+    "stageApprovalGrantsOnlyNamedCapabilityAndStage": true
+  },
+  "firstCapability": {
+    "id": "tenant_authenticated_vector_search_canary_v1",
+    "implementationState": "not_implemented",
+    "purpose": "internal_search",
+    "tenantCohort": "production_canary_v1",
+    "defaultDeny": true,
+    "ingress": "separate_canary_ingress_required",
+    "reusePublicApiFlagAllowed": false,
+    "providerId": "fixture",
+    "maxProviderAuthority": "fixture",
+    "externalProviderEgressAllowed": false,
+    "marengoAuthority": "shadow_only",
+    "billingMode": "non_billable",
+    "commercialUseAllowed": false,
+    "mcpAllowed": false,
+    "ingestionAllowed": false,
+    "generalPublicApiAllowed": false
+  },
+  "canaryStages": [
+    {
+      "id": "S0",
+      "name": "prepared_zero_authority",
+      "normalTrafficPercentageMax": 0,
+      "versionOverrideSmokeAllowed": false,
+      "tenantAllowlistRequired": true,
+      "humanStageApprovalRequired": false,
+      "description": "Candidate artifacts and evidence may be prepared, but no production deployment, route, or traffic mutation is authorized."
+    },
+    {
+      "id": "S1",
+      "name": "operator_smoke_zero_percent",
+      "normalTrafficPercentageMax": 0,
+      "versionOverrideSmokeAllowed": true,
+      "tenantAllowlistRequired": true,
+      "humanStageApprovalRequired": true,
+      "description": "A separately implemented and approved canary ingress may target the candidate version by version override while normal traffic remains at zero percent."
+    },
+    {
+      "id": "S2",
+      "name": "allowlisted_canary",
+      "normalTrafficPercentageMax": 1,
+      "versionOverrideSmokeAllowed": true,
+      "tenantAllowlistRequired": true,
+      "humanStageApprovalRequired": true,
+      "description": "At most one percent deployment share; only eligible authenticated canary tenants may exercise the named capability."
+    },
+    {
+      "id": "S3",
+      "name": "expanded_canary",
+      "normalTrafficPercentageMax": 5,
+      "versionOverrideSmokeAllowed": true,
+      "tenantAllowlistRequired": true,
+      "humanStageApprovalRequired": true,
+      "description": "At most five percent deployment share after green S2 evidence and a new stage-bound human approval."
+    },
+    {
+      "id": "S4",
+      "name": "controlled_production",
+      "normalTrafficPercentageMax": 25,
+      "versionOverrideSmokeAllowed": true,
+      "tenantAllowlistRequired": true,
+      "humanStageApprovalRequired": true,
+      "description": "At most twenty-five percent deployment share; still allowlisted, non-public, fixture-only, and non-billable."
+    },
+    {
+      "id": "S5",
+      "name": "full_worker_version_capability_scoped",
+      "normalTrafficPercentageMax": 100,
+      "versionOverrideSmokeAllowed": true,
+      "tenantAllowlistRequired": true,
+      "humanStageApprovalRequired": true,
+      "description": "One hundred percent Worker-version deployment does not grant general public, provider, billing, MCP, ingestion, or commercial authority."
+    }
+  ],
+  "stageTransitionEvidence": {
+    "exactProtectedMainShaRequired": true,
+    "exactWorkerVersionIdRequired": true,
+    "releaseManifestSha256Required": true,
+    "qualitySuccessRequired": true,
+    "productionReadinessSuccessRequired": true,
+    "zeroUnexpectedInfrastructureDeltaRequired": true,
+    "previousStageEvidenceRequired": true,
+    "humanApprovalRequired": true,
+    "noStorageMigrationRequiredForV1": true
+  },
+  "healthGuardrails": {
+    "hardStopEvents": [
+      "authentication_bypass",
+      "tenant_crossover",
+      "entitlement_bypass",
+      "denied_operation_side_effect",
+      "rights_or_publication_boundary_violation",
+      "quota_or_ledger_corruption",
+      "unexpected_route_or_binding_drift",
+      "unauthorized_provider_activity",
+      "unauthorized_billing_activity",
+      "unauthorized_commercial_activity"
+    ],
+    "errorRateRollbackPercent": 2,
+    "latencyRollbackMultiplierVsAcceptedBaseline": 2.5,
+    "zeroCrossTenantExposureRequired": true,
+    "zeroRightsBoundaryViolationsRequired": true,
+    "zeroUnauthorizedBillableEventsRequired": true
+  },
+  "rollback": {
+    "order": [
+      "fail_capability_closed",
+      "revoke_canary_tenant_eligibility_and_credentials",
+      "deny_or_remove_canary_ingress",
+      "rollback_worker_to_last_known_good_version_at_100_percent",
+      "run_read_only_reconciliation_and_production_readiness"
+    ],
+    "lastKnownGoodVersionMustBeRecordedBeforeStageMutation": true,
+    "storageStateRollbackAssumed": false,
+    "durableObjectLifecycleOrSchemaMigrationAllowedInV1": false,
+    "r2SchemaOrDestructiveMutationAllowedInV1": false,
+    "vectorIndexDestructiveMutationAllowedInV1": false,
+    "futureStorageMigrationRequiresSeparateRecoveryGate": true
+  },
+  "tenantEligibility": {
+    "defaultDecision": "deny",
+    "productionIdentityEnabledRequired": true,
+    "cryptographicAuthenticationRequired": true,
+    "canonicalTenantBindingRequired": true,
+    "explicitCanaryCohortRequired": true,
+    "approvedPurposeRequired": "internal_search",
+    "providerIdRequired": "fixture",
+    "maxProviderAuthorityRequired": "fixture",
+    "persistentQuotaRequired": true,
+    "rightsPolicySatisfiedRequired": true,
+    "unresolvedIsolationReplayOrAbuseFindingAllowed": false,
+    "billingModeRequired": "non_billable",
+    "generalCommercialRepresentationAllowed": false
+  },
+  "providerAuthority": {
+    "authoritativeProviderId": "fixture",
+    "marengoAuthority": "shadow_only",
+    "externalProviderEgressAllowed": false,
+    "authoritativeEmbeddingPromotionAllowed": false,
+    "externalProviderCommercialClaimsAllowed": false,
+    "separateProviderAcceptanceAndPromotionRequired": true
+  },
+  "billingCommercialGates": {
+    "firstCanaryBillable": false,
+    "abuseControlsSatisfied": false,
+    "billingMappingSatisfied": false,
+    "publicApiReleaseAllowed": false,
+    "mcpReleaseAllowed": false,
+    "commercialReleaseAllowed": false,
+    "invoiceableUsageEventsAllowed": false,
+    "futureBillingRequires": [
+      "abuse_controls_acceptance",
+      "billing_mapping_acceptance",
+      "usage_to_invoice_reconciliation",
+      "dispute_and_refund_semantics",
+      "explicit_commercial_release_approval"
+    ]
+  },
+  "humanApproval": {
+    "required": true,
+    "automationCanApprove": false,
+    "oneTime": true,
+    "replayAllowed": false,
+    "approvalMustBeHumanAuthored": true,
+    "approvalMustBind": [
+      "protected_main_sha",
+      "worker_version_id",
+      "release_manifest_sha256",
+      "capability_id",
+      "stage_id",
+      "tenant_cohort_id",
+      "not_after"
+    ],
+    "approvalMustStateNoOtherCapabilityAuthorized": true,
+    "staleOrBroaderApprovalAccepted": false
+  },
+  "futureImplementationPrerequisites": [
+    "separate_reviewed_release_workflow",
+    "separate_reviewed_canary_ingress",
+    "immutable_release_manifest",
+    "one_time_stage_approval_verifier",
+    "last_known_good_version_capture",
+    "kill_switch_execution_path",
+    "post_stage_reconciliation_and_readiness",
+    "abuse_controls_before_public_api_or_mcp",
+    "billing_mapping_before_commercial_release"
+  ]
+}
