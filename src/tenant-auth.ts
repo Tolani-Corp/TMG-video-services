@@ -47,7 +47,7 @@ export interface AuthenticatedTenantPrincipal {
 
 export interface TenantCredentialVerificationOptions {
   registry: TenantIdentityRegistry;
-  verificationKeys: Readonly<Record<string, JsonWebKey>>;
+  verificationKeys: Readonly<Record<string, string>>;
   expectedAudience: string;
   expectedEnvironment: "development" | "preview" | "production";
   nowMs?: number;
@@ -144,12 +144,14 @@ export async function verifyTenantCredential(
   if (header.alg !== "EdDSA") throw new TenantAuthenticationError("credential_algorithm_rejected");
   if (header.typ !== "JWT") throw new TenantAuthenticationError("credential_type_rejected");
   const kid = requireString(header, "kid");
-  const jwk = options.verificationKeys[kid];
-  if (!jwk) throw new TenantAuthenticationError("credential_key_unknown");
+  const encodedPublicKey = options.verificationKeys[kid];
+  if (!encodedPublicKey) throw new TenantAuthenticationError("credential_key_unknown");
 
   let verificationKey: CryptoKey;
   try {
-    verificationKey = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["verify"]);
+    const rawPublicKey = decodeBase64Url(encodedPublicKey);
+    if (rawPublicKey.byteLength !== 32) throw new Error("Ed25519 public key must be 32 bytes");
+    verificationKey = await crypto.subtle.importKey("raw", rawPublicKey, { name: "Ed25519" }, false, ["verify"]);
   } catch {
     throw new TenantAuthenticationError("credential_key_invalid");
   }
