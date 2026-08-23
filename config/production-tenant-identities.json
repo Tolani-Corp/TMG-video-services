@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0.0",
+  "defaultDecision": "deny",
+  "issuers": {
+    "urn:tolani:tmg:production-acceptance": {
+      "audiences": ["urn:tolani:tmg-video-services:production"],
+      "environment": "production",
+      "principals": {
+        "prod-acceptance-principal-a": {
+          "tenantId": "prod_acceptance_auth_a",
+          "enabled": true
+        },
+        "prod-acceptance-principal-b": {
+          "tenantId": "prod_acceptance_auth_b",
+          "enabled": true
+        },
+        "prod-acceptance-disabled": {
+          "tenantId": "prod_acceptance_auth_disabled",
+          "enabled": false
+        }
+      }
+    }
+  }
+}
