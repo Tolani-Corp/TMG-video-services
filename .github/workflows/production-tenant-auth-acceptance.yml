@@ -1,0 +1,280 @@
+name: Production Tenant Authentication Entitlement Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact protected main SHA with successful Quality
+        required: true
+        type: string
+      authorization:
+        description: Type RUN_LIVE_PRODUCTION_TENANT_AUTH_ENTITLEMENT_ACCEPTANCE_V1
+        required: true
+        type: string
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  checks: read
+  issues: write
+
+jobs:
+  accept:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && github.event.issue.number == 34 && github.actor == 'TolaniCorp' && github.event.comment.body == 'RUN_LIVE_PRODUCTION_TENANT_AUTH_ENTITLEMENT_ACCEPTANCE_V1') }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+      ACCEPTANCE_AUTHORIZATION: ${{ github.event_name == 'workflow_dispatch' && inputs.authorization || github.event.comment.body }}
+      TMG_AUTH_ACCEPTANCE_OUT: production-tenant-auth-acceptance
+      TMG_RUNTIME_ACCEPTANCE_OUT: production-tenant-auth-acceptance
+      TMG_ACCEPTANCE_WORKER_NAME: tmg-video-tenant-auth-acceptance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Enforce live-production auth acceptance governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMG_AUTH_ACCEPTANCE_OUT"
+          actual_sha="$(git rev-parse HEAD)"
+          test "$GITHUB_REF" = "refs/heads/main" || { echo "Tenant auth acceptance must execute from main" >&2; exit 2; }
+          test "$EXPECTED_SHA" = "$actual_sha" || { echo "expected_sha must equal checked-out main SHA" >&2; exit 2; }
+          test "$EXPECTED_SHA" = "$GITHUB_SHA" || { echo "expected_sha must equal executing GitHub SHA" >&2; exit 2; }
+          test "$ACCEPTANCE_AUTHORIZATION" = "RUN_LIVE_PRODUCTION_TENANT_AUTH_ENTITLEMENT_ACCEPTANCE_V1" || { echo "Explicit live-production auth acceptance authorization is required" >&2; exit 2; }
+
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          test "$protected" = "true" || { echo "main is not protected" >&2; exit 3; }
+          issue14="$(gh issue view 14 --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          issue29="$(gh issue view 29 --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          issue34="$(gh issue view 34 --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          test "$issue14" = "CLOSED" || { echo "Issue #14 must remain closed" >&2; exit 3; }
+          test "$issue29" = "CLOSED" || { echo "Runtime Acceptance v1 Issue #29 must be closed green first" >&2; exit 3; }
+          test "$issue34" = "OPEN" || { echo "Issue #34 must remain open during tenant auth acceptance" >&2; exit 3; }
+
+          quality_passes="$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/commits/${EXPECTED_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "validate" and .conclusion == "success" and .app.slug == "github-actions")] | length')"
+          test "$quality_passes" -ge 1 || { echo "Exact main SHA has no successful GitHub Actions validate check" >&2; exit 4; }
+
+          frozen_sha="$(sha256sum config/production-infrastructure-fingerprint.json | awk '{print $1}')"
+          test "$frozen_sha" = "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c" || { echo "Frozen production fingerprint drifted" >&2; exit 4; }
+          node --input-type=module - <<'NODE'
+          import policy from './config/production-release-policy.json' with { type: 'json' };
+          const evidence = policy.evidenceBindings?.tenantUsageLedgerAcceptance;
+          if (evidence?.status !== 'verified' || evidence?.runId !== '32606309623' || evidence?.zeroUnexpectedInfrastructureDelta !== true) {
+            throw new Error('Bound live Runtime Acceptance v1 evidence is missing or changed');
+          }
+          if (policy.activationAllowed !== false || policy.publicTrafficAllowed !== false) throw new Error('Production authority expanded before auth acceptance');
+          for (const value of Object.values(policy.runtimeFlags ?? {})) if (value !== 'false' && value !== 'unverified') throw new Error('Production runtime flag unexpectedly enabled');
+          NODE
+
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN is missing" >&2; exit 5; }
+          test "$CLOUDFLARE_ACCOUNT_ID" = "d20586cf099d39fcbeb5db4043e20f6f" || { echo "Unexpected Cloudflare account ID" >&2; exit 5; }
+          printf 'expectedSha=%s\nprotected=%s\nissue14=%s\nissue29=%s\nissue34=%s\nqualityValidatePasses=%s\nfrozenFingerprint=%s\n' \
+            "$EXPECTED_SHA" "$protected" "$issue14" "$issue29" "$issue34" "$quality_passes" "$frozen_sha" \
+            > "$TMG_AUTH_ACCEPTANCE_OUT/governance.txt"
+
+      - name: Validate exact candidate and fail-closed policies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm check
+          pnpm cf-typegen:production
+          pnpm production:dry-run
+
+      - name: Snapshot frozen live production surface before auth acceptance
+        shell: bash
+        run: node scripts/snapshot-production-runtime-surface.mjs --phase=before
+
+      - name: Execute cryptographic tenant auth and entitlement matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRIVATE_JWK="$RUNNER_TEMP/tmg-auth-private-${GITHUB_RUN_ID}.json"
+          PUBLIC_JWK="$RUNNER_TEMP/tmg-auth-public-${GITHUB_RUN_ID}.json"
+          REPLAY_TOKEN="$RUNNER_TEMP/tmg-auth-replay-${GITHUB_RUN_ID}.txt"
+          CONTROL_TOKEN="$(openssl rand -hex 32)"
+          export TMG_AUTH_PRIVATE_JWK_PATH="$PRIVATE_JWK"
+          export TMG_AUTH_PUBLIC_JWK_PATH="$PUBLIC_JWK"
+          export TMG_AUTH_REPLAY_TOKEN_PATH="$REPLAY_TOKEN"
+          export TMG_AUTH_CONTROL_TOKEN="$CONTROL_TOKEN"
+          node scripts/generate-production-tenant-auth-acceptance-keys.mjs
+          PUBLIC_JWK_VALUE="$(tr -d '\n' < "$PUBLIC_JWK")"
+
+          HARNESS_PID=""
+          stop_harness() {
+            if [ -n "${HARNESS_PID:-}" ]; then
+              kill "$HARNESS_PID" 2>/dev/null || true
+              wait "$HARNESS_PID" 2>/dev/null || true
+              HARNESS_PID=""
+              sleep 5
+            fi
+          }
+          cleanup() {
+            stop_harness
+            rm -f "$PRIVATE_JWK" "$PUBLIC_JWK" "$REPLAY_TOKEN"
+          }
+          trap cleanup EXIT
+
+          start_harness() {
+            local log_file="$1"
+            pnpm exec wrangler dev \
+              --config config/wrangler.production-tenant-auth-acceptance.jsonc \
+              --remote \
+              --ip 127.0.0.1 \
+              --port 8788 \
+              --local-protocol http \
+              --show-interactive-dev-session=false \
+              --log-level=warn \
+              --var \
+                "TMG_AUTH_MODE:production_acceptance_only" \
+                "TMG_AUTH_OBJECT_PREFIX:prod_acceptance_auth" \
+                "TMG_AUTH_RUN_ID:${GITHUB_RUN_ID}" \
+                "TMG_AUTH_KID:production-acceptance-v1" \
+                "TMG_AUTH_PUBLIC_JWK:${PUBLIC_JWK_VALUE}" \
+                "TMG_AUTH_CONTROL_TOKEN:${CONTROL_TOKEN}" \
+              > "$log_file" 2>&1 &
+            HARNESS_PID=$!
+            for attempt in $(seq 1 90); do
+              if ! kill -0 "$HARNESS_PID" 2>/dev/null; then
+                cat "$log_file" >&2
+                echo "Remote tenant auth acceptance harness terminated before becoming ready" >&2
+                exit 10
+              fi
+              if curl --fail --silent --show-error \
+                -H "Authorization: Bearer ${CONTROL_TOKEN}" \
+                http://127.0.0.1:8788/health > /dev/null 2>&1; then
+                return 0
+              fi
+              sleep 2
+            done
+            cat "$log_file" >&2
+            echo "Remote tenant auth acceptance harness did not become ready" >&2
+            exit 10
+          }
+
+          start_harness "$RUNNER_TEMP/tmg-auth-phase1-${GITHUB_RUN_ID}.log"
+          node scripts/production-tenant-auth-acceptance-runner.mjs --phase=1
+          stop_harness
+
+          start_harness "$RUNNER_TEMP/tmg-auth-phase2-${GITHUB_RUN_ID}.log"
+          node scripts/production-tenant-auth-acceptance-runner.mjs --phase=2
+          stop_harness
+          cleanup
+          trap - EXIT
+
+      - name: Snapshot live production surface after auth acceptance
+        shell: bash
+        run: node scripts/snapshot-production-runtime-surface.mjs --phase=after
+
+      - name: Prove zero unexpected production drift
+        shell: bash
+        run: node scripts/compare-production-runtime-surfaces.mjs
+
+      - name: Build sanitized auth acceptance evidence package
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const out = process.env.TMG_AUTH_ACCEPTANCE_OUT;
+          const phase1 = JSON.parse(fs.readFileSync(`${out}/phase-1-results.json`, 'utf8'));
+          const phase2 = JSON.parse(fs.readFileSync(`${out}/phase-2-results.json`, 'utf8'));
+          const comparison = JSON.parse(fs.readFileSync(`${out}/surface-comparison.json`, 'utf8'));
+          const summary = {
+            schemaVersion: '1.0.0',
+            target: 'live_production',
+            testedCommitSha: process.env.GITHUB_SHA,
+            frozenFingerprintSha256: 'feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c',
+            credentialAlgorithm: 'Ed25519/EdDSA',
+            issuer: 'urn:tolani:tmg:production-acceptance',
+            audience: 'urn:tolani:tmg-video-services:production',
+            environment: 'production',
+            phase1Cases: phase1.cases.map(({ name, status }) => ({ name, status })),
+            phase2Cases: phase2.cases.map(({ name, status }) => ({ name, status })),
+            tenantAuthentication: 'verified_candidate',
+            tenantIsolation: 'verified_candidate',
+            entitlementGate: 'verified_candidate',
+            persistentCredentialReplayRejection: 'verified_candidate',
+            deniedOperationsSideEffectFree: true,
+            zeroUnexpectedInfrastructureDelta: comparison.zeroUnexpectedInfrastructureDelta === true,
+            mutationAuthority: false,
+            activationAuthority: false,
+            publicTrafficAuthority: false,
+            providerPromotionAuthority: false,
+            billingAuthority: false,
+            commercialAuthority: false,
+          };
+          fs.writeFileSync(`${out}/auth-acceptance-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+          find "$TMG_AUTH_ACCEPTANCE_OUT" -maxdepth 1 -type f ! -name 'evidence-manifest.sha256' ! -name 'evidence-package.sha256' -print0 \
+            | sort -z | xargs -0 sha256sum > "$TMG_AUTH_ACCEPTANCE_OUT/evidence-manifest.sha256"
+          sha256sum "$TMG_AUTH_ACCEPTANCE_OUT/evidence-manifest.sha256" > "$TMG_AUTH_ACCEPTANCE_OUT/evidence-package.sha256"
+
+      - name: Publish tenant auth acceptance outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTANCE_JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMG_AUTH_ACCEPTANCE_OUT"
+          package_sha="not-reached"
+          [ -f "$TMG_AUTH_ACCEPTANCE_OUT/evidence-package.sha256" ] && package_sha="$(awk '{print $1}' "$TMG_AUTH_ACCEPTANCE_OUT/evidence-package.sha256")"
+          phase1="not-reached"; [ -f "$TMG_AUTH_ACCEPTANCE_OUT/phase-1-results.json" ] && phase1="verified"
+          phase2="not-reached"; [ -f "$TMG_AUTH_ACCEPTANCE_OUT/phase-2-results.json" ] && phase2="verified"
+          drift="not-reached"; [ -f "$TMG_AUTH_ACCEPTANCE_OUT/surface-comparison.json" ] && drift="zero-unexpected-delta"
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat > "$TMG_AUTH_ACCEPTANCE_OUT/issue-comment.md" <<EOF
+          ### Production Tenant Authentication + Entitlement Acceptance v1 — run ${GITHUB_RUN_ID}
+
+          - Target: \`live production\`
+          - Commit: \`${GITHUB_SHA}\`
+          - Status: \`${ACCEPTANCE_JOB_STATUS}\`
+          - Frozen fingerprint: \`feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c\`
+          - Cryptographic authentication / negative matrix / canonical tenant binding: **${phase1}**
+          - Restarted-session persistent credential replay rejection: **${phase2}**
+          - Post-acceptance infrastructure/runtime drift: **${drift}**
+          - Evidence package SHA-256: \`${package_sha}\`
+          - Mutation authority: **false**
+          - Activation authority: **false**
+          - Public/API/MCP/provider-promotion/billing/commercial authority: **false**
+          - Run: ${run_url}
+
+          $([ "$ACCEPTANCE_JOB_STATUS" = "success" ] && echo "Authentication/entitlement evidence is candidate-only until independent Production Readiness is green and the evidence binding is reviewed into the repository. No capability activation is authorized." || echo "Acceptance did not complete successfully. No authentication/entitlement gate is satisfied and no authority is expanded.")
+          EOF
+          gh issue comment 34 --repo "$GITHUB_REPOSITORY" --body-file "$TMG_AUTH_ACCEPTANCE_OUT/issue-comment.md"
+          gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file "$TMG_AUTH_ACCEPTANCE_OUT/issue-comment.md"
+
+      - name: Upload sanitized tenant auth acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-production-tenant-auth-acceptance-${{ github.run_id }}
+          path: production-tenant-auth-acceptance
+          if-no-files-found: warn
+          retention-days: 90
