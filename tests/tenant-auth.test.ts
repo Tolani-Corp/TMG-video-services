@@ -108,7 +108,11 @@ describe("tenant credential verification", () => {
     await expectAuthError(verifyTenantCredential(await sign(claims({ sub: "principal_disabled" })), base), "principal_disabled");
 
     const credential = await sign(claims());
-    const [header, payload, signature] = credential.split(".");
+    const segments = credential.split(".");
+    expect(segments).toHaveLength(3);
+    const header = segments[0]!;
+    const payload = segments[1]!;
+    const signature = segments[2]!;
     const tampered = `${header}.${payload}.${signature.slice(0, -2)}aa`;
     await expectAuthError(verifyTenantCredential(tampered, base), "credential_signature_invalid");
   });
