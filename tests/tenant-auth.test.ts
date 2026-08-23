@@ -42,7 +42,8 @@ const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("
 
 async function createSigner() {
   const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-  const publicJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  const publicRaw = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+  const publicKey = Buffer.from(publicRaw).toString("base64url");
   const sign = async (claims: Record<string, unknown>, kid = "test-key") => {
     const header = encode({ alg: "EdDSA", typ: "JWT", kid });
     const payload = encode(claims);
@@ -50,7 +51,7 @@ async function createSigner() {
     const signature = await crypto.subtle.sign({ name: "Ed25519" }, keyPair.privateKey, new TextEncoder().encode(input));
     return `${input}.${Buffer.from(signature).toString("base64url")}`;
   };
-  return { publicJwk, sign };
+  return { publicKey, sign };
 }
 
 const claims = (overrides: Record<string, unknown> = {}) => ({
@@ -76,11 +77,11 @@ async function expectAuthError(promise: Promise<unknown>, code: string) {
 
 describe("tenant credential verification", () => {
   it("verifies Ed25519 and derives the canonical tenant from issuer + subject", async () => {
-    const { publicJwk, sign } = await createSigner();
+    const { publicKey, sign } = await createSigner();
     const credential = await sign(claims());
     const principal = await verifyTenantCredential(credential, {
       registry,
-      verificationKeys: { "test-key": publicJwk },
+      verificationKeys: { "test-key": publicKey },
       expectedAudience: audience,
       expectedEnvironment: "production",
       nowMs: 1_700_000_100_000,
@@ -91,11 +92,11 @@ describe("tenant credential verification", () => {
     expect(principal.credentialId).toBe("credential-1");
   });
 
-  it("fails closed for wrong issuer, audience, environment, expiration, disabled principal, and signature", async () => {
-    const { publicJwk, sign } = await createSigner();
+  it("fails closed for wrong issuer, audience, environment, expiration, disabled principal, key material, and signature", async () => {
+    const { publicKey, sign } = await createSigner();
     const base = {
       registry,
-      verificationKeys: { "test-key": publicJwk },
+      verificationKeys: { "test-key": publicKey },
       expectedAudience: audience,
       expectedEnvironment: "production" as const,
       nowMs: 1_700_000_100_000,
@@ -106,6 +107,10 @@ describe("tenant credential verification", () => {
     await expectAuthError(verifyTenantCredential(await sign(claims({ env: "preview" })), base), "credential_environment_rejected");
     await expectAuthError(verifyTenantCredential(await sign(claims({ exp: 1_700_000_050 })), base), "credential_expired");
     await expectAuthError(verifyTenantCredential(await sign(claims({ sub: "principal_disabled" })), base), "principal_disabled");
+    await expectAuthError(
+      verifyTenantCredential(await sign(claims()), { ...base, verificationKeys: { "test-key": Buffer.alloc(31).toString("base64url") } }),
+      "credential_key_invalid",
+    );
 
     const credential = await sign(claims());
     const segments = credential.split(".");
