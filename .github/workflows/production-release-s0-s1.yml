@@ -1,0 +1,473 @@
+name: Production Release S0-S1 Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: S0 prepares an undeployed version; S1 performs a zero-percent operator smoke
+        required: true
+        type: choice
+        options:
+          - S0
+          - S1
+      expected_sha:
+        description: Exact protected main SHA with successful Quality
+        required: true
+        type: string
+      authorization:
+        description: S0=PREPARE_TMG_PRODUCTION_S0_V1; S1=EXECUTE_TMG_PRODUCTION_S1_ZERO_PERCENT_V1
+        required: true
+        type: string
+      candidate_version_id:
+        description: S1 only — candidate Worker version ID emitted by the S0 artifact
+        required: false
+        type: string
+      lkg_version_id:
+        description: S1 only — last-known-good Worker version ID emitted by the S0 artifact
+        required: false
+        type: string
+      origin_run_id:
+        description: S1 only — S0 GitHub run ID used in the immutable manifest
+        required: false
+        type: string
+      release_manifest_sha256:
+        description: S1 only — immutable S0 release-manifest SHA-256
+        required: false
+        type: string
+      release_issue_number:
+        description: S1 only — issue containing the human-authored approval comment
+        required: false
+        type: string
+      approval_comment_id:
+        description: S1 only — GitHub issue-comment ID containing APPROVE_TMG_RELEASE_STAGE_V1 JSON
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+  issues: write
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+  TMG_RELEASE_OUT: production-release-control
+  TMG_RUNTIME_ACCEPTANCE_OUT: production-release-control
+  TMG_ACCEPTANCE_WORKER_NAME: tmg-video-s1-canary-ingress
+
+jobs:
+  release:
+    if: ${{ github.actor == 'TolaniCorp' }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      RELEASE_STAGE: ${{ inputs.stage }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RELEASE_AUTHORIZATION: ${{ inputs.authorization }}
+      INPUT_CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+      INPUT_LKG_VERSION_ID: ${{ inputs.lkg_version_id }}
+      INPUT_ORIGIN_RUN_ID: ${{ inputs.origin_run_id }}
+      INPUT_RELEASE_MANIFEST_SHA256: ${{ inputs.release_manifest_sha256 }}
+      INPUT_RELEASE_ISSUE_NUMBER: ${{ inputs.release_issue_number }}
+      INPUT_APPROVAL_COMMENT_ID: ${{ inputs.approval_comment_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Enforce release-control governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMG_RELEASE_OUT"
+          actual_sha="$(git rev-parse HEAD)"
+          test "$GITHUB_REF" = "refs/heads/main" || { echo "S0/S1 release control must execute from main" >&2; exit 2; }
+          test "$EXPECTED_SHA" = "$actual_sha" || { echo "expected_sha must equal checked-out main SHA" >&2; exit 2; }
+          test "$EXPECTED_SHA" = "$GITHUB_SHA" || { echo "expected_sha must equal executing GitHub SHA" >&2; exit 2; }
+          case "$RELEASE_STAGE" in
+            S0) test "$RELEASE_AUTHORIZATION" = "PREPARE_TMG_PRODUCTION_S0_V1" || { echo "S0 authorization phrase rejected" >&2; exit 2; } ;;
+            S1) test "$RELEASE_AUTHORIZATION" = "EXECUTE_TMG_PRODUCTION_S1_ZERO_PERCENT_V1" || { echo "S1 authorization phrase rejected" >&2; exit 2; } ;;
+            *) echo "Only S0 or S1 is implemented" >&2; exit 2 ;;
+          esac
+
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          test "$protected" = "true" || { echo "main is not protected" >&2; exit 3; }
+          for issue in 14 29 34 40 42; do
+            state="$(gh issue view "$issue" --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+            test "$state" = "CLOSED" || { echo "Issue #${issue} must be closed green before release control execution" >&2; exit 3; }
+          done
+
+          quality_passes="$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/commits/${EXPECTED_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "validate" and .conclusion == "success" and .app.slug == "github-actions")] | length')"
+          test "$quality_passes" -ge 1 || { echo "Exact main SHA has no successful GitHub Actions validate check" >&2; exit 4; }
+
+          frozen_sha="$(sha256sum config/production-infrastructure-fingerprint.json | awk '{print $1}')"
+          test "$frozen_sha" = "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c" || { echo "Frozen production fingerprint drifted" >&2; exit 4; }
+
+          node --input-type=module - <<'NODE'
+          import release from './config/production-release-policy.json' with { type: 'json' };
+          import authority from './config/production-release-authority.json' with { type: 'json' };
+          if (authority.status !== 's0_s1_implemented_unactivated') throw new Error('release-control implementation is not repository-bound');
+          if (authority.implementation?.maxExecutableStage !== 'S1') throw new Error('release-control stage ceiling changed');
+          if (authority.implementation?.s1ApprovalPresent !== false) throw new Error('repository must not contain a standing S1 approval');
+          if (release.activationAllowed !== false || release.publicTrafficAllowed !== false) throw new Error('production activation/public authority expanded');
+          for (const [key, value] of Object.entries(release.runtimeFlags ?? {})) {
+            if (key === 'TMG_PROVIDER_ACCEPTANCE_STATE') {
+              if (value !== 'unverified') throw new Error(`${key} must remain unverified`);
+            } else if (value !== 'false') throw new Error(`${key} must remain false`);
+          }
+          NODE
+
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN is missing" >&2; exit 5; }
+          printf 'stage=%s\nexpectedSha=%s\nprotected=%s\nqualityValidatePasses=%s\nfrozenFingerprint=%s\n' \
+            "$RELEASE_STAGE" "$EXPECTED_SHA" "$protected" "$quality_passes" "$frozen_sha" \
+            > "$TMG_RELEASE_OUT/governance.txt"
+
+      - name: Validate candidate and fail-closed policies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm check
+          pnpm cf-typegen:production
+          pnpm production:dry-run
+
+      - name: Snapshot frozen live production surface before stage action
+        shell: bash
+        run: node scripts/snapshot-production-runtime-surface.mjs --phase=before
+
+      - name: Capture last-known-good deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deployments status --env production --json > "$TMG_RELEASE_OUT/deployment-status-before.json"
+          lkg="$(node scripts/extract-production-lkg-version.mjs "$TMG_RELEASE_OUT/deployment-status-before.json")"
+          echo "TMG_RELEASE_LKG_VERSION_ID=${lkg}" >> "$GITHUB_ENV"
+          printf '%s\n' "$lkg" > "$TMG_RELEASE_OUT/last-known-good-version.txt"
+
+      - name: S0 upload candidate without deployment
+        if: ${{ inputs.stage == 'S0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="tmg-s0-${EXPECTED_SHA:0:12}-${GITHUB_RUN_ID}"
+          pnpm exec wrangler versions upload --env production --tag "$tag" --message "TMG S0 candidate ${EXPECTED_SHA} run ${GITHUB_RUN_ID}" \
+            > "$TMG_RELEASE_OUT/version-upload.log" 2>&1
+          pnpm exec wrangler versions list --env production --json > "$TMG_RELEASE_OUT/versions-after-upload.json"
+          candidate="$(TAG="$tag" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const payload = JSON.parse(fs.readFileSync('production-release-control/versions-after-upload.json', 'utf8'));
+          const tag = process.env.TAG;
+          const seen = new Set();
+          const walk = (value) => {
+            if (!value || typeof value !== 'object' || seen.has(value)) return null;
+            seen.add(value);
+            if (!Array.isArray(value)) {
+              const valueTag = value.tag ?? value.annotations?.['workers/tag'];
+              const id = value.id ?? value.version_id ?? value.versionId;
+              if (valueTag === tag && typeof id === 'string') return id;
+            }
+            for (const nested of Object.values(value)) {
+              const found = walk(nested);
+              if (found) return found;
+            }
+            return null;
+          };
+          const found = walk(payload);
+          if (!found) process.exit(2);
+          process.stdout.write(found);
+          NODE
+          )"
+          test -n "$candidate" || { cat "$TMG_RELEASE_OUT/version-upload.log" >&2; echo "Unable to resolve uploaded candidate version" >&2; exit 10; }
+          echo "TMG_RELEASE_CANDIDATE_VERSION_ID=${candidate}" >> "$GITHUB_ENV"
+          printf '%s\n' "$candidate" > "$TMG_RELEASE_OUT/candidate-version.txt"
+          export TMG_RELEASE_CANDIDATE_SHA="$EXPECTED_SHA"
+          export TMG_RELEASE_CANDIDATE_VERSION_ID="$candidate"
+          export TMG_RELEASE_LKG_VERSION_ID
+          node scripts/build-production-release-manifest.mjs
+
+          pnpm exec wrangler deployments status --env production --json > "$TMG_RELEASE_OUT/deployment-status-after-s0.json"
+          LKG="$TMG_RELEASE_LKG_VERSION_ID" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const before = JSON.parse(fs.readFileSync('production-release-control/deployment-status-before.json','utf8'));
+          const after = JSON.parse(fs.readFileSync('production-release-control/deployment-status-after-s0.json','utf8'));
+          const find = (value) => {
+            if (!value || typeof value !== 'object') return null;
+            if (Array.isArray(value.versions)) return value.versions.map(v => ({id:v.version_id ?? v.versionId ?? v.id, percentage:Number(v.percentage ?? v.traffic_percentage ?? v.trafficPercentage)}));
+            for (const nested of Object.values(value)) { const found = find(nested); if (found) return found; }
+            return null;
+          };
+          const b = find(before); const a = find(after);
+          if (!b || !a || JSON.stringify(b) !== JSON.stringify(a) || a.length !== 1 || a[0].id !== process.env.LKG || a[0].percentage !== 100) {
+            throw new Error(`S0 changed active deployment unexpectedly: before=${JSON.stringify(b)} after=${JSON.stringify(a)}`);
+          }
+          NODE
+
+      - name: S1 reconstruct immutable S0 manifest
+        if: ${{ inputs.stage == 'S1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$INPUT_CANDIDATE_VERSION_ID" || { echo "candidate_version_id is required for S1" >&2; exit 11; }
+          test -n "$INPUT_LKG_VERSION_ID" || { echo "lkg_version_id is required for S1" >&2; exit 11; }
+          test -n "$INPUT_ORIGIN_RUN_ID" || { echo "origin_run_id is required for S1" >&2; exit 11; }
+          test -n "$INPUT_RELEASE_MANIFEST_SHA256" || { echo "release_manifest_sha256 is required for S1" >&2; exit 11; }
+          test "$TMG_RELEASE_LKG_VERSION_ID" = "$INPUT_LKG_VERSION_ID" || { echo "Live last-known-good version no longer matches S0 manifest" >&2; exit 11; }
+          export TMG_RELEASE_CANDIDATE_SHA="$EXPECTED_SHA"
+          export TMG_RELEASE_CANDIDATE_VERSION_ID="$INPUT_CANDIDATE_VERSION_ID"
+          export TMG_RELEASE_LKG_VERSION_ID="$INPUT_LKG_VERSION_ID"
+          export TMG_RELEASE_ORIGIN_RUN_ID="$INPUT_ORIGIN_RUN_ID"
+          node scripts/build-production-release-manifest.mjs
+          computed="$(awk '{print $1}' "$TMG_RELEASE_OUT/release-manifest.sha256")"
+          test "$computed" = "$INPUT_RELEASE_MANIFEST_SHA256" || { echo "Reconstructed manifest digest does not match S0 artifact" >&2; exit 11; }
+          echo "TMG_RELEASE_CANDIDATE_VERSION_ID=${INPUT_CANDIDATE_VERSION_ID}" >> "$GITHUB_ENV"
+          echo "TMG_RELEASE_LKG_VERSION_ID=${INPUT_LKG_VERSION_ID}" >> "$GITHUB_ENV"
+          echo "TMG_RELEASE_MANIFEST_SHA256=${computed}" >> "$GITHUB_ENV"
+
+      - name: S1 validate separate human stage approval
+        if: ${{ inputs.stage == 'S1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$INPUT_RELEASE_ISSUE_NUMBER" != "42" || { echo "Implementation Issue #42 cannot self-approve S1" >&2; exit 12; }
+          test "$INPUT_RELEASE_ISSUE_NUMBER" =~ ^[0-9]+$ || { echo "release_issue_number must be numeric" >&2; exit 12; }
+          test "$INPUT_APPROVAL_COMMENT_ID" =~ ^[0-9]+$ || { echo "approval_comment_id must be numeric" >&2; exit 12; }
+          issue_state="$(gh issue view "$INPUT_RELEASE_ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          test "$issue_state" = "OPEN" || { echo "Stage-approval issue must be open" >&2; exit 12; }
+          gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${INPUT_APPROVAL_COMMENT_ID}" > "$TMG_RELEASE_OUT/approval-comment.json"
+          approval_issue_url="$(jq -r '.issue_url' "$TMG_RELEASE_OUT/approval-comment.json")"
+          test "${approval_issue_url##*/}" = "$INPUT_RELEASE_ISSUE_NUMBER" || { echo "Approval comment belongs to a different issue" >&2; exit 12; }
+          approval_actor="$(jq -r '.user.login' "$TMG_RELEASE_OUT/approval-comment.json")"
+          approval_created_at="$(jq -r '.created_at' "$TMG_RELEASE_OUT/approval-comment.json")"
+          approval_body="$(jq -r '.body' "$TMG_RELEASE_OUT/approval-comment.json")"
+          prefix='APPROVE_TMG_RELEASE_STAGE_V1 '
+          [[ "$approval_body" == "$prefix"* ]] || { echo "Approval comment prefix is invalid" >&2; exit 12; }
+          approval_json="${approval_body#"$prefix"}"
+
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${INPUT_RELEASE_ISSUE_NUMBER}/comments?per_page=100" \
+            --jq '.[].body' > "$TMG_RELEASE_OUT/release-issue-comment-bodies.txt"
+          consumed_ids="$(node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const bodies = fs.readFileSync('production-release-control/release-issue-comment-bodies.txt','utf8').split('\n');
+          const prefix = 'CONSUMED_TMG_RELEASE_APPROVAL_V1 ';
+          const ids = [];
+          for (const body of bodies) {
+            if (!body.startsWith(prefix)) continue;
+            const id = body.slice(prefix.length).trim().split(/\s+/)[0];
+            if (id) ids.push(id);
+          }
+          process.stdout.write([...new Set(ids)].join('\n'));
+          NODE
+          )"
+          export TMG_RELEASE_APPROVAL_JSON="$approval_json"
+          export TMG_RELEASE_APPROVAL_ACTOR="$approval_actor"
+          export TMG_RELEASE_APPROVAL_COMMENT_ID="$INPUT_APPROVAL_COMMENT_ID"
+          export TMG_RELEASE_APPROVAL_CREATED_AT="$approval_created_at"
+          export TMG_RELEASE_CONSUMED_APPROVAL_IDS="$consumed_ids"
+          node scripts/verify-production-stage-approval.mjs
+
+      - name: S1 create zero-percent split deployment
+        if: ${{ inputs.stage == 'S1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler versions deploy \
+            "${TMG_RELEASE_CANDIDATE_VERSION_ID}@0%" \
+            "${TMG_RELEASE_LKG_VERSION_ID}@100%" \
+            --env production \
+            --message "TMG S1 zero-percent operator smoke run ${GITHUB_RUN_ID}" \
+            -y
+          echo "TMG_S1_DEPLOYMENT_MUTATED=true" >> "$GITHUB_ENV"
+          pnpm exec wrangler deployments status --env production --json > "$TMG_RELEASE_OUT/deployment-status-s1.json"
+          node scripts/verify-production-s1-deployment.mjs "$TMG_RELEASE_OUT/deployment-status-s1.json"
+
+      - name: S1 operator smoke through ephemeral Service Binding ingress
+        if: ${{ inputs.stage == 'S1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTROL_TOKEN="$(openssl rand -hex 32)"
+          HARNESS_PID=""
+          cleanup() {
+            if [ -n "${HARNESS_PID:-}" ]; then
+              kill "$HARNESS_PID" 2>/dev/null || true
+              wait "$HARNESS_PID" 2>/dev/null || true
+              sleep 5
+            fi
+          }
+          trap cleanup EXIT
+          pnpm exec wrangler dev \
+            --config config/wrangler.production-s1-canary-ingress.jsonc \
+            --remote \
+            --ip 127.0.0.1 \
+            --port 8791 \
+            --local-protocol http \
+            --show-interactive-dev-session=false \
+            --log-level=warn \
+            --var \
+              "TMG_CANARY_MODE:s1_operator_smoke_only" \
+              "TMG_CANARY_CONTROL_TOKEN:${CONTROL_TOKEN}" \
+              "TMG_CANARY_TARGET_VERSION_ID:${TMG_RELEASE_CANDIDATE_VERSION_ID}" \
+              "TMG_CANARY_RELEASE_MANIFEST_SHA256:${TMG_RELEASE_MANIFEST_SHA256}" \
+            > "$RUNNER_TEMP/tmg-s1-canary-ingress-${GITHUB_RUN_ID}.log" 2>&1 &
+          HARNESS_PID=$!
+          for attempt in $(seq 1 90); do
+            if ! kill -0 "$HARNESS_PID" 2>/dev/null; then
+              cat "$RUNNER_TEMP/tmg-s1-canary-ingress-${GITHUB_RUN_ID}.log" >&2
+              exit 13
+            fi
+            if curl --fail --silent --show-error -H "Authorization: Bearer ${CONTROL_TOKEN}" http://127.0.0.1:8791/health > /dev/null 2>&1; then break; fi
+            sleep 2
+            test "$attempt" -lt 90 || { cat "$RUNNER_TEMP/tmg-s1-canary-ingress-${GITHUB_RUN_ID}.log" >&2; exit 13; }
+          done
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${CONTROL_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"stageId\":\"S1\",\"workerVersionId\":\"${TMG_RELEASE_CANDIDATE_VERSION_ID}\",\"releaseManifestSha256\":\"${TMG_RELEASE_MANIFEST_SHA256}\",\"capabilityId\":\"tenant_authenticated_vector_search_canary_v1\"}" \
+            http://127.0.0.1:8791/internal/release/smoke \
+            | tee "$TMG_RELEASE_OUT/s1-smoke-result.json"
+          cleanup
+          HARNESS_PID=""
+          trap - EXIT
+
+      - name: Snapshot live production surface after stage action
+        shell: bash
+        run: node scripts/snapshot-production-runtime-surface.mjs --phase=after
+
+      - name: Prove governed production surfaces remain unchanged
+        shell: bash
+        run: node scripts/compare-production-runtime-surfaces.mjs
+
+      - name: Run post-stage production readiness checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMG_RELEASE_OUT/readiness"
+          pnpm exec wrangler whoami > "$TMG_RELEASE_OUT/readiness/whoami.log"
+          pnpm exec wrangler r2 bucket info tmg-video-assets-prod --json > "$TMG_RELEASE_OUT/readiness/r2.json"
+          pnpm exec wrangler vectorize get tmg-video-segments-512-prod --json > "$TMG_RELEASE_OUT/readiness/vectorize.json"
+          pnpm exec wrangler workflows describe tmg-video-ingestion-prod > "$TMG_RELEASE_OUT/readiness/ingestion-workflow.log"
+          pnpm exec wrangler workflows describe tmg-video-revocation-prod > "$TMG_RELEASE_OUT/readiness/revocation-workflow.log"
+          pnpm exec wrangler deploy --env production --dry-run --outdir "$TMG_RELEASE_OUT/readiness/dry-run" > "$TMG_RELEASE_OUT/readiness/deploy-dry-run.log"
+          printf 'success\n' > "$TMG_RELEASE_OUT/readiness/status.txt"
+
+      - name: S1 consume one-time human approval
+        if: ${{ success() && inputs.stage == 'S1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          approval_id="$(jq -r '.approvalId' "$TMG_RELEASE_OUT/validated-stage-approval.json")"
+          gh issue comment "$INPUT_RELEASE_ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "CONSUMED_TMG_RELEASE_APPROVAL_V1 ${approval_id} run=${GITHUB_RUN_ID} manifest=${TMG_RELEASE_MANIFEST_SHA256} candidate=${TMG_RELEASE_CANDIDATE_VERSION_ID} stage=S1 normalTraffic=0%"
+
+      - name: Roll back failed S1 to last-known-good
+        if: ${{ failure() && inputs.stage == 'S1' && env.TMG_S1_DEPLOYMENT_MUTATED == 'true' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          pnpm exec wrangler rollback "$TMG_RELEASE_LKG_VERSION_ID" --env production \
+            --message "TMG automatic S1 rollback run ${GITHUB_RUN_ID}" \
+            > "$TMG_RELEASE_OUT/rollback.log" 2>&1
+          rollback_status=$?
+          pnpm exec wrangler deployments status --env production --json > "$TMG_RELEASE_OUT/deployment-status-after-rollback.json" 2>&1 || true
+          node scripts/snapshot-production-runtime-surface.mjs --phase=rollback 2>&1 | tee "$TMG_RELEASE_OUT/rollback-surface.log" || true
+          pnpm exec wrangler deploy --env production --dry-run --outdir "$TMG_RELEASE_OUT/rollback-dry-run" > "$TMG_RELEASE_OUT/rollback-dry-run.log" 2>&1 || true
+          exit "$rollback_status"
+
+      - name: Build release-control evidence package
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          const out = process.env.TMG_RELEASE_OUT;
+          const read = (path) => fs.existsSync(`${out}/${path}`) ? fs.readFileSync(`${out}/${path}`,'utf8').trim() : null;
+          const summary = {
+            schemaVersion: '1.0.0',
+            stage: process.env.RELEASE_STAGE,
+            commitSha: process.env.GITHUB_SHA,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            candidateWorkerVersionId: process.env.TMG_RELEASE_CANDIDATE_VERSION_ID ?? null,
+            lastKnownGoodWorkerVersionId: process.env.TMG_RELEASE_LKG_VERSION_ID ?? null,
+            releaseManifestSha256: read('release-manifest.sha256')?.split(/\s+/)[0] ?? null,
+            s1NormalTrafficPercentage: process.env.RELEASE_STAGE === 'S1' ? 0 : null,
+            operatorSmoke: fs.existsSync(`${out}/s1-smoke-result.json`) ? 'completed' : 'not-run',
+            postStageReadiness: read('readiness/status.txt') ?? 'not-reached',
+            zeroUnexpectedInfrastructureDelta: fs.existsSync(`${out}/surface-comparison.json`),
+            activationAuthority: false,
+            publicTrafficAuthority: false,
+            publicApiAuthority: false,
+            mcpAuthority: false,
+            ingestionAuthority: false,
+            providerPromotionAuthority: false,
+            billingAuthority: false,
+            commercialAuthority: false,
+            s2PlusAuthority: false,
+          };
+          fs.writeFileSync(`${out}/release-control-summary.json`, `${JSON.stringify(summary,null,2)}\n`);
+          NODE
+          find "$TMG_RELEASE_OUT" -type f ! -name 'evidence-manifest.sha256' ! -name 'evidence-package.sha256' -print0 \
+            | sort -z | xargs -0 sha256sum > "$TMG_RELEASE_OUT/evidence-manifest.sha256"
+          sha256sum "$TMG_RELEASE_OUT/evidence-manifest.sha256" > "$TMG_RELEASE_OUT/evidence-package.sha256"
+
+      - name: Publish release-control outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_sha="$(awk '{print $1}' "$TMG_RELEASE_OUT/evidence-package.sha256" 2>/dev/null || echo not-reached)"
+          manifest_sha="$(awk '{print $1}' "$TMG_RELEASE_OUT/release-manifest.sha256" 2>/dev/null || echo not-reached)"
+          candidate="${TMG_RELEASE_CANDIDATE_VERSION_ID:-not-reached}"
+          lkg="${TMG_RELEASE_LKG_VERSION_ID:-not-reached}"
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat > "$TMG_RELEASE_OUT/issue-comment.md" <<EOF
+          ### Production Release S0/S1 Control — run ${GITHUB_RUN_ID}
+
+          - Stage: \`${RELEASE_STAGE}\`
+          - Commit: \`${GITHUB_SHA}\`
+          - Status: \`${RELEASE_JOB_STATUS}\`
+          - Candidate Worker version: \`${candidate}\`
+          - Last-known-good Worker version: \`${lkg}\`
+          - Release manifest SHA-256: \`${manifest_sha}\`
+          - Evidence package SHA-256: \`${package_sha}\`
+          - S1 normal production traffic: **0%**
+          - Public/API/MCP/ingestion/provider-promotion/billing/commercial/S2+ authority: **false**
+          - Run: ${run_url}
+
+          $([ "$RELEASE_STAGE" = "S0" ] && echo "S0 only uploads an undeployed candidate version and prepares immutable evidence. It does not authorize S1." || echo "S1 is valid only for the exact one-time human approval consumed by this run. It does not authorize S2 or broader production capability.")
+          EOF
+          gh issue comment 42 --repo "$GITHUB_REPOSITORY" --body-file "$TMG_RELEASE_OUT/issue-comment.md"
+          gh issue comment 18 --repo "$GITHUB_REPOSITORY" --body-file "$TMG_RELEASE_OUT/issue-comment.md"
+
+      - name: Upload release-control evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-production-release-${{ inputs.stage }}-${{ github.run_id }}
+          path: production-release-control
+          if-no-files-found: warn
+          retention-days: 90

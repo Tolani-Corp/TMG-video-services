@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tolani.internal/schemas/tmg-production-stage-approval-v1.json",
+  "title": "TMG Production S1 Stage Approval v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "approvalId",
+    "humanAuthor",
+    "automationAuthored",
+    "protectedMainSha",
+    "workerVersionId",
+    "releaseManifestSha256",
+    "capabilityId",
+    "stageId",
+    "tenantCohortId",
+    "issuedAt",
+    "notAfter",
+    "noOtherCapabilityAuthorized"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "approvalId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{12,128}$" },
+    "humanAuthor": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "automationAuthored": { "const": false },
+    "protectedMainSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "workerVersionId": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "releaseManifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "capabilityId": { "const": "tenant_authenticated_vector_search_canary_v1" },
+    "stageId": { "const": "S1" },
+    "tenantCohortId": { "const": "production_canary_v1" },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "notAfter": { "type": "string", "format": "date-time" },
+    "noOtherCapabilityAuthorized": { "const": true }
+  }
+}

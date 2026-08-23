@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "tmg-video-s1-canary-ingress",
+  "main": "../scripts/production-release-s1-canary-ingress.mjs",
+  "compatibility_date": "2026-08-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "services": [
+    {
+      "binding": "TARGET_SERVICE",
+      "service": "tmg-video-services-production"
+    }
+  ],
+  "vars": {
+    "TMG_CANARY_MODE": "s1_operator_smoke_only"
+  }
+}
