@@ -17,7 +17,8 @@ const auth = read("src/tenant-auth.ts");
 const snapshot = read("scripts/snapshot-production-runtime-surface.mjs");
 const wrangler = readJson("config/wrangler.production-tenant-auth-acceptance.jsonc");
 const identities = readJson("config/production-tenant-identities.json");
-const entitlements = readJson("config/tenant-entitlements.json");
+const canonicalEntitlements = readJson("config/tenant-entitlements.json");
+const acceptanceEntitlements = readJson("config/production-tenant-auth-acceptance-entitlements.json");
 const release = readJson("config/production-release-policy.json");
 
 if (wrangler.workers_dev !== false || wrangler.preview_urls !== false) failures.push("tenant auth acceptance harness must disable workers.dev and preview URLs");
@@ -44,13 +45,28 @@ for (const [subject, tenantId, enabled] of [
   const principal = issuer?.principals?.[subject];
   if (!principal || principal.tenantId !== tenantId || principal.enabled !== enabled) failures.push(`identity registry mismatch for ${subject}`);
 }
+
+if (canonicalEntitlements.defaultDecision !== "deny") failures.push("canonical entitlement registry must remain default deny");
+for (const [tenantId, entitlement] of Object.entries(canonicalEntitlements.tenants ?? {})) {
+  if (entitlement?.environment === "production") failures.push(`${tenantId} must not have a production entitlement in the canonical G0 registry`);
+}
+if (acceptanceEntitlements.defaultDecision !== "deny" || acceptanceEntitlements.acceptanceOnly !== true) {
+  failures.push("production auth entitlement fixture must be explicit acceptance-only and default deny");
+}
 for (const tenantId of ["prod_acceptance_auth_a", "prod_acceptance_auth_b"]) {
-  const entitlement = entitlements.tenants?.[tenantId];
-  if (!entitlement || entitlement.enabled !== true || entitlement.environment !== "production") failures.push(`${tenantId} must be enabled only for production acceptance`);
+  const entitlement = acceptanceEntitlements.tenants?.[tenantId];
+  if (!entitlement || entitlement.enabled !== true || entitlement.environment !== "production") failures.push(`${tenantId} must be enabled only in the production acceptance fixture`);
   if (JSON.stringify(entitlement?.allowedPurposes) !== JSON.stringify(["internal_search"])) failures.push(`${tenantId} purpose scope must remain internal_search only`);
   if (JSON.stringify(entitlement?.allowedProviderIds) !== JSON.stringify(["fixture"]) || entitlement?.maxProviderAuthority !== "fixture") failures.push(`${tenantId} provider authority must remain fixture-only`);
 }
-if (entitlements.tenants?.prod_acceptance_auth_disabled?.enabled !== false) failures.push("disabled acceptance tenant must remain disabled");
+const disabledAcceptance = acceptanceEntitlements.tenants?.prod_acceptance_auth_disabled;
+if (!disabledAcceptance || disabledAcceptance.enabled !== false) failures.push("disabled acceptance tenant must remain disabled");
+for (const value of Object.values(disabledAcceptance?.quotas ?? {})) {
+  if (!Number.isSafeInteger(value) || value <= 0) failures.push("disabled acceptance tenant fixture quotas must remain structurally valid positive integers");
+}
+if (!worker.includes("production-tenant-auth-acceptance-entitlements.json") || worker.includes('"../config/tenant-entitlements.json"')) {
+  failures.push("ephemeral tenant auth harness must use only the isolated acceptance entitlement fixture");
+}
 
 for (const required of [
   "header.alg !== \"EdDSA\"",
