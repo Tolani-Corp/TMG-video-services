@@ -1,5 +1,5 @@
 import identityRegistry from "../config/production-tenant-identities.json";
-import entitlementRegistry from "../config/tenant-entitlements.json";
+import entitlementRegistry from "../config/production-tenant-auth-acceptance-entitlements.json";
 import {
   TenantAuthenticationError,
   evaluateAuthenticatedTenantEntitlement,
