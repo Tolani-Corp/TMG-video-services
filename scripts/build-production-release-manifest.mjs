@@ -13,8 +13,9 @@ fs.mkdirSync(outDir, { recursive: true });
 const candidateMainSha = required("TMG_RELEASE_CANDIDATE_SHA");
 const candidateWorkerVersionId = required("TMG_RELEASE_CANDIDATE_VERSION_ID");
 const lastKnownGoodWorkerVersionId = required("TMG_RELEASE_LKG_VERSION_ID");
-const workflowRunId = required("GITHUB_RUN_ID");
+const workflowRunId = process.env.TMG_RELEASE_ORIGIN_RUN_ID ?? required("GITHUB_RUN_ID");
 if (!/^[0-9a-f]{40}$/.test(candidateMainSha)) throw new Error("candidate main SHA must be a full lowercase git SHA");
+if (!/^[0-9]+$/.test(workflowRunId)) throw new Error("origin workflow run ID must be numeric");
 if (candidateWorkerVersionId === lastKnownGoodWorkerVersionId) throw new Error("candidate version must differ from last-known-good version");
 
 const policyBytes = fs.readFileSync("config/production-release-authority.json");
