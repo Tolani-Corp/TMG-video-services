@@ -7,7 +7,10 @@ const outDir = process.env.TMG_RUNTIME_ACCEPTANCE_OUT ?? "production-runtime-acc
 const phase = process.argv.find((arg) => arg.startsWith("--phase="))?.split("=")[1] ?? "before";
 const frozen = JSON.parse(fs.readFileSync("config/production-infrastructure-fingerprint.json", "utf8"));
 const expectedWorker = "tmg-video-services-production";
-const acceptanceWorker = "tmg-video-runtime-acceptance";
+const acceptanceWorkers = new Set([
+  "tmg-video-runtime-acceptance",
+  process.env.TMG_ACCEPTANCE_WORKER_NAME,
+].filter(Boolean));
 const expectedR2 = "tmg-video-assets-prod";
 const expectedVector = "tmg-video-segments-512-prod";
 const expectedWorkflows = ["tmg-video-ingestion-prod", "tmg-video-revocation-prod"];
@@ -124,9 +127,10 @@ for (const workflowName of expectedWorkflows) {
   };
 }
 
+const governedServices = new Set([expectedWorker, ...acceptanceWorkers]);
 const domains = await listCursorArray(`/accounts/${accountId}/workers/domains`, 100);
 const governedDomains = domains
-  .filter((item) => [expectedWorker, acceptanceWorker].includes(item.service))
+  .filter((item) => governedServices.has(item.service))
   .map((item) => ({ id: item.id, hostname: item.hostname, service: item.service, zoneId: item.zone_id }))
   .sort((a, b) => a.hostname.localeCompare(b.hostname));
 
@@ -135,7 +139,7 @@ const governedRoutes = [];
 for (const zone of zones) {
   const envelope = await request(`/zones/${zone.id}/workers/routes`);
   for (const route of envelope.result ?? []) {
-    if ([expectedWorker, acceptanceWorker].includes(route.script)) {
+    if (governedServices.has(route.script)) {
       governedRoutes.push({ zoneId: zone.id, zoneName: zone.name, id: route.id, pattern: route.pattern, script: route.script });
     }
   }
@@ -144,7 +148,7 @@ governedRoutes.sort((a, b) => `${a.zoneName}:${a.pattern}`.localeCompare(`${b.zo
 
 const scripts = await listCursorArray(`/accounts/${accountId}/workers/scripts`, 100);
 const acceptanceScripts = scripts
-  .filter((item) => item.id === acceptanceWorker || item.script_name === acceptanceWorker || item.service_name === acceptanceWorker)
+  .filter((item) => acceptanceWorkers.has(item.id) || acceptanceWorkers.has(item.script_name) || acceptanceWorkers.has(item.service_name))
   .map((item) => ({ id: item.id ?? item.script_name, modifiedOn: item.modified_on ?? null }));
 
 const state = {
@@ -219,10 +223,9 @@ if (state.routing.domains.length !== 0 || state.routing.routes.length !== 0) {
   throw new Error(`unexpected production/acceptance routing detected: ${JSON.stringify(state.routing)}`);
 }
 if (state.routing.acceptancePersistentScripts.length !== 0) {
-  throw new Error(`persistent acceptance Worker script detected: ${JSON.stringify(state.routing.acceptancePersistentScripts)}`);
+  throw new Error(`acceptance harness persisted unexpectedly: ${JSON.stringify(state.routing.acceptancePersistentScripts)}`);
 }
 
-const surfaceSha256 = canonicalHash(state);
-const output = { observedAt: new Date().toISOString(), phase, surfaceSha256, state };
-fs.writeFileSync(`${outDir}/surface-${phase}.json`, `${JSON.stringify(output, null, 2)}\n`);
-console.log(`production runtime surface ${phase} verified sha256=${surfaceSha256}`);
+fs.writeFileSync(`${outDir}/surface-${phase}.json`, `${JSON.stringify(state, null, 2)}\n`);
+fs.writeFileSync(`${outDir}/surface-${phase}.sha256`, `${canonicalHash(state)}  surface-${phase}.json\n`);
+console.log(`production runtime surface ${phase} snapshot passed`);
