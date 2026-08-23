@@ -72,7 +72,7 @@ const getTenantStub = (env, tenantId) => {
 
 const verificationOptions = (env) => ({
   registry: identityRegistry,
-  verificationKeys: { [env.TMG_AUTH_KID]: env.TMG_AUTH_PUBLIC_KEY },
+  verificationKeys: { [env.TMG_AUTH_KID]: env.TMG_AUTH_PUBLIC_JWK },
   expectedAudience: "urn:tolani:tmg-video-services:production",
   expectedEnvironment: "production",
   clockSkewSeconds: 0,
