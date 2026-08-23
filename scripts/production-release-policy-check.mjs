@@ -48,6 +48,7 @@ const gateNames = [
   "exactHeadQuality",
   "productionReadinessAudit",
   "tenantUsageLedgerAcceptance",
+  "tenantAuthenticationEntitlementAcceptance",
   "explicitReleaseApproval",
 ];
 for (const gate of gateNames) {
