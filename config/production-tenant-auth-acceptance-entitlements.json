@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0.0",
+  "defaultDecision": "deny",
+  "acceptanceOnly": true,
+  "tenants": {
+    "prod_acceptance_auth_a": {
+      "enabled": true,
+      "environment": "production",
+      "allowedPurposes": ["internal_search"],
+      "allowedProviderIds": ["fixture"],
+      "maxProviderAuthority": "fixture",
+      "quotas": {
+        "maxRequestsPerHour": 20,
+        "maxMediaDurationMsPerDay": 600000,
+        "maxVectorsPerDay": 100
+      }
+    },
+    "prod_acceptance_auth_b": {
+      "enabled": true,
+      "environment": "production",
+      "allowedPurposes": ["internal_search"],
+      "allowedProviderIds": ["fixture"],
+      "maxProviderAuthority": "fixture",
+      "quotas": {
+        "maxRequestsPerHour": 20,
+        "maxMediaDurationMsPerDay": 600000,
+        "maxVectorsPerDay": 100
+      }
+    },
+    "prod_acceptance_auth_disabled": {
+      "enabled": false,
+      "environment": "production",
+      "allowedPurposes": ["internal_search"],
+      "allowedProviderIds": ["fixture"],
+      "maxProviderAuthority": "fixture",
+      "quotas": {
+        "maxRequestsPerHour": 1,
+        "maxMediaDurationMsPerDay": 1,
+        "maxVectorsPerDay": 1
+      }
+    }
+  }
+}
