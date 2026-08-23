@@ -13,42 +13,6 @@
         "maxMediaDurationMsPerDay": 3600000,
         "maxVectorsPerDay": 1000
       }
-    },
-    "prod_acceptance_auth_a": {
-      "enabled": true,
-      "environment": "production",
-      "allowedPurposes": ["internal_search"],
-      "allowedProviderIds": ["fixture"],
-      "maxProviderAuthority": "fixture",
-      "quotas": {
-        "maxRequestsPerHour": 20,
-        "maxMediaDurationMsPerDay": 600000,
-        "maxVectorsPerDay": 100
-      }
-    },
-    "prod_acceptance_auth_b": {
-      "enabled": true,
-      "environment": "production",
-      "allowedPurposes": ["internal_search"],
-      "allowedProviderIds": ["fixture"],
-      "maxProviderAuthority": "fixture",
-      "quotas": {
-        "maxRequestsPerHour": 20,
-        "maxMediaDurationMsPerDay": 600000,
-        "maxVectorsPerDay": 100
-      }
-    },
-    "prod_acceptance_auth_disabled": {
-      "enabled": false,
-      "environment": "production",
-      "allowedPurposes": ["internal_search"],
-      "allowedProviderIds": ["fixture"],
-      "maxProviderAuthority": "fixture",
-      "quotas": {
-        "maxRequestsPerHour": 0,
-        "maxMediaDurationMsPerDay": 0,
-        "maxVectorsPerDay": 0
-      }
     }
   }
 }
