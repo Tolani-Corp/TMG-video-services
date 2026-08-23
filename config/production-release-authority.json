@@ -1,7 +1,8 @@
 {
   "schemaVersion": "1.0.0",
-  "status": "design_only",
+  "status": "s0_s1_implemented_unactivated",
   "issue": 40,
+  "implementationIssue": 42,
   "sourceMainSha": "4e62a9f042bb18110d954b37e4bcf7b4c3958e46",
   "frozenInfrastructureFingerprintSha256": "feb4e3cc93d57c8390a02abece1bdf3a04e905128012480197bd23068ff4f00c",
   "authority": {
@@ -28,11 +29,11 @@
   },
   "firstCapability": {
     "id": "tenant_authenticated_vector_search_canary_v1",
-    "implementationState": "not_implemented",
+    "implementationState": "s0_s1_control_implemented_unactivated",
     "purpose": "internal_search",
     "tenantCohort": "production_canary_v1",
     "defaultDeny": true,
-    "ingress": "separate_canary_ingress_required",
+    "ingress": "ephemeral_service_binding_s1_operator_smoke",
     "reusePublicApiFlagAllowed": false,
     "providerId": "fixture",
     "maxProviderAuthority": "fixture",
@@ -44,61 +45,28 @@
     "ingestionAllowed": false,
     "generalPublicApiAllowed": false
   },
+  "implementation": {
+    "maxExecutableStage": "S1",
+    "s0Implemented": true,
+    "s1Implemented": true,
+    "s1ApprovalPresent": false,
+    "s2PlusImplemented": false,
+    "normalTrafficPercentageAuthorized": 0,
+    "persistentCanaryIngress": false,
+    "releaseWorkflow": ".github/workflows/production-release-s0-s1.yml",
+    "releaseManifestSchema": "config/production-release-manifest.schema.json",
+    "stageApprovalSchema": "config/production-stage-approval.schema.json",
+    "canaryIngressConfig": "config/wrangler.production-s1-canary-ingress.jsonc",
+    "rollbackToLastKnownGoodRequired": true,
+    "postStageReadinessRequired": true
+  },
   "canaryStages": [
-    {
-      "id": "S0",
-      "name": "prepared_zero_authority",
-      "normalTrafficPercentageMax": 0,
-      "versionOverrideSmokeAllowed": false,
-      "tenantAllowlistRequired": true,
-      "humanStageApprovalRequired": false,
-      "description": "Candidate artifacts and evidence may be prepared, but no production deployment, route, or traffic mutation is authorized."
-    },
-    {
-      "id": "S1",
-      "name": "operator_smoke_zero_percent",
-      "normalTrafficPercentageMax": 0,
-      "versionOverrideSmokeAllowed": true,
-      "tenantAllowlistRequired": true,
-      "humanStageApprovalRequired": true,
-      "description": "A separately implemented and approved canary ingress may target the candidate version by version override while normal traffic remains at zero percent."
-    },
-    {
-      "id": "S2",
-      "name": "allowlisted_canary",
-      "normalTrafficPercentageMax": 1,
-      "versionOverrideSmokeAllowed": true,
-      "tenantAllowlistRequired": true,
-      "humanStageApprovalRequired": true,
-      "description": "At most one percent deployment share; only eligible authenticated canary tenants may exercise the named capability."
-    },
-    {
-      "id": "S3",
-      "name": "expanded_canary",
-      "normalTrafficPercentageMax": 5,
-      "versionOverrideSmokeAllowed": true,
-      "tenantAllowlistRequired": true,
-      "humanStageApprovalRequired": true,
-      "description": "At most five percent deployment share after green S2 evidence and a new stage-bound human approval."
-    },
-    {
-      "id": "S4",
-      "name": "controlled_production",
-      "normalTrafficPercentageMax": 25,
-      "versionOverrideSmokeAllowed": true,
-      "tenantAllowlistRequired": true,
-      "humanStageApprovalRequired": true,
-      "description": "At most twenty-five percent deployment share; still allowlisted, non-public, fixture-only, and non-billable."
-    },
-    {
-      "id": "S5",
-      "name": "full_worker_version_capability_scoped",
-      "normalTrafficPercentageMax": 100,
-      "versionOverrideSmokeAllowed": true,
-      "tenantAllowlistRequired": true,
-      "humanStageApprovalRequired": true,
-      "description": "One hundred percent Worker-version deployment does not grant general public, provider, billing, MCP, ingestion, or commercial authority."
-    }
+    { "id": "S0", "normalTrafficPercentageMax": 0, "versionOverrideSmokeAllowed": false, "tenantAllowlistRequired": true, "humanStageApprovalRequired": false },
+    { "id": "S1", "normalTrafficPercentageMax": 0, "versionOverrideSmokeAllowed": true, "tenantAllowlistRequired": true, "humanStageApprovalRequired": true },
+    { "id": "S2", "normalTrafficPercentageMax": 1, "versionOverrideSmokeAllowed": true, "tenantAllowlistRequired": true, "humanStageApprovalRequired": true },
+    { "id": "S3", "normalTrafficPercentageMax": 5, "versionOverrideSmokeAllowed": true, "tenantAllowlistRequired": true, "humanStageApprovalRequired": true },
+    { "id": "S4", "normalTrafficPercentageMax": 25, "versionOverrideSmokeAllowed": true, "tenantAllowlistRequired": true, "humanStageApprovalRequired": true },
+    { "id": "S5", "normalTrafficPercentageMax": 100, "versionOverrideSmokeAllowed": true, "tenantAllowlistRequired": true, "humanStageApprovalRequired": true }
   ],
   "stageTransitionEvidence": {
     "exactProtectedMainShaRequired": true,
@@ -203,13 +171,7 @@
     "staleOrBroaderApprovalAccepted": false
   },
   "futureImplementationPrerequisites": [
-    "separate_reviewed_release_workflow",
-    "separate_reviewed_canary_ingress",
-    "immutable_release_manifest",
-    "one_time_stage_approval_verifier",
-    "last_known_good_version_capture",
-    "kill_switch_execution_path",
-    "post_stage_reconciliation_and_readiness",
+    "s2_allowlisted_tenant_canary",
     "abuse_controls_before_public_api_or_mcp",
     "billing_mapping_before_commercial_release"
   ]
