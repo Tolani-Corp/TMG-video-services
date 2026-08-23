@@ -93,7 +93,11 @@ if (phase === "1") {
   expectReason(await call("/v1/authorize", { credential: "not-a-jwt", body: requestBody() }), 401, "credential_malformed");
 
   const signed = await signCredential("prod-acceptance-principal-a", `${runId}-signature`);
-  const tampered = `${signed.slice(0, -1)}${signed.endsWith("A") ? "B" : "A"}`;
+  const signedSegments = signed.split(".");
+  assert(signedSegments.length === 3, "signed credential must contain exactly three segments");
+  const signedPayload = JSON.parse(Buffer.from(signedSegments[1], "base64url").toString("utf8"));
+  signedPayload.sub = "prod-acceptance-principal-b";
+  const tampered = `${signedSegments[0]}.${encode(signedPayload)}.${signedSegments[2]}`;
   expectReason(await call("/v1/authorize", { credential: tampered, body: requestBody() }), 401, "credential_signature_invalid");
 
   expectReason(await call("/v1/authorize", {
