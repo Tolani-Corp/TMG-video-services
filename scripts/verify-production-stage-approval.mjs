@@ -22,7 +22,7 @@ try {
   fail("approval body must contain valid JSON");
 }
 
-const actor = required("GITHUB_ACTOR");
+const actor = required("TMG_RELEASE_APPROVAL_ACTOR");
 const commentId = required("TMG_RELEASE_APPROVAL_COMMENT_ID");
 const commentCreatedAt = required("TMG_RELEASE_APPROVAL_CREATED_AT");
 const consumed = new Set((process.env.TMG_RELEASE_CONSUMED_APPROVAL_IDS ?? "").split("\n").map((value) => value.trim()).filter(Boolean));
