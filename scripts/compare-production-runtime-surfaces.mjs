@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 
 const outDir = process.env.TMG_RUNTIME_ACCEPTANCE_OUT ?? "production-runtime-acceptance";
-const before = JSON.parse(fs.readFileSync(`${outDir}/surface-before.json`, "utf8"));
-const after = JSON.parse(fs.readFileSync(`${outDir}/surface-after.json`, "utf8"));
+const beforeEnvelope = JSON.parse(fs.readFileSync(`${outDir}/surface-before.json`, "utf8"));
+const afterEnvelope = JSON.parse(fs.readFileSync(`${outDir}/surface-after.json`, "utf8"));
+const before = beforeEnvelope.state ?? beforeEnvelope;
+const after = afterEnvelope.state ?? afterEnvelope;
 
 const same = (left, right, label) => {
   if (JSON.stringify(left) !== JSON.stringify(right)) {
@@ -11,13 +14,17 @@ const same = (left, right, label) => {
 };
 
 for (const key of ["productionWorker", "r2", "vectorize", "workflows", "durableObjectNamespace", "routing"]) {
-  same(before.state[key], after.state[key], key);
+  same(before[key], after[key], key);
 }
+
+const canonicalHash = (value) => crypto.createHash("sha256").update(`${JSON.stringify(value)}\n`).digest("hex");
+const beforeSurfaceSha256 = beforeEnvelope.surfaceSha256 ?? canonicalHash(before);
+const afterSurfaceSha256 = afterEnvelope.surfaceSha256 ?? canonicalHash(after);
 
 const result = {
   schemaVersion: "1.0.0",
-  beforeSurfaceSha256: before.surfaceSha256,
-  afterSurfaceSha256: after.surfaceSha256,
+  beforeSurfaceSha256,
+  afterSurfaceSha256,
   zeroUnexpectedInfrastructureDelta: true,
   permittedMutation: "TenantUsageLedger acceptance-object SQLite rows only",
   publicAuthority: false,
