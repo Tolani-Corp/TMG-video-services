@@ -71,13 +71,15 @@ export class TenantAuthenticationError extends Error {
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
-function decodeBase64Url(value: string): Uint8Array {
+function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new TenantAuthenticationError("credential_malformed");
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
   try {
     const binary = atob(`${normalized}${padding}`);
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
   } catch {
     throw new TenantAuthenticationError("credential_malformed");
   }
@@ -132,7 +134,9 @@ export async function verifyTenantCredential(
   if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
     throw new TenantAuthenticationError("credential_malformed");
   }
-  const [encodedHeader, encodedPayload, encodedSignature] = segments;
+  const encodedHeader = segments[0]!;
+  const encodedPayload = segments[1]!;
+  const encodedSignature = segments[2]!;
   const header = decodeJsonSegment(encodedHeader);
   const payload = decodeJsonSegment(encodedPayload);
   if (!isRecord(header) || !isRecord(payload)) throw new TenantAuthenticationError("credential_malformed");
