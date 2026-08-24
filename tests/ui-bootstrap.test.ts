@@ -13,6 +13,9 @@ function env(overrides: Record<string, string> = {}): Env {
     TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED: "false",
     TMG_PROVIDER_ACCEPTANCE_STATE: "unverified",
     TMG_TENANT_USAGE_LEDGER_ENABLED: "false",
+    TMG_INTAKE_ENABLED: "false",
+    TMG_CONTROL_DB_BINDING_STATE: "unprovisioned",
+    TMG_CONSOLE_HOST: "console.tolanimediagroup.com",
     ...overrides,
   } as unknown as Env;
 }
@@ -29,8 +32,32 @@ describe("TMG enterprise UI bootstrap", () => {
     expect(bootstrap.release.activationAuthorized).toBe(false);
     expect(bootstrap.release.publicTrafficAuthorized).toBe(false);
     expect(bootstrap.release.commercialUseAuthorized).toBe(false);
+    expect(bootstrap.requestIntake.authenticatedIntakeEnabled).toBe(false);
     expect(bootstrap.requestIntake.backendSubmissionEnabled).toBe(false);
     expect(bootstrap.requestIntake.fileTransferEnabled).toBe(false);
+    expect(bootstrap.requestIntake.processingAuthority).toBe(false);
+  });
+
+  it("requires both the explicit intake flag and a provisioned control database", () => {
+    expect(buildUiBootstrap(env({ TMG_INTAKE_ENABLED: "true" })).requestIntake.authenticatedIntakeEnabled).toBe(false);
+    expect(
+      buildUiBootstrap(env({ TMG_CONTROL_DB_BINDING_STATE: "provisioned" })).requestIntake.authenticatedIntakeEnabled,
+    ).toBe(false);
+
+    const bootstrap = buildUiBootstrap(env({
+      TMG_INTAKE_ENABLED: "true",
+      TMG_CONTROL_DB_BINDING_STATE: "provisioned",
+    }));
+    expect(bootstrap.requestIntake.authenticatedIntakeEnabled).toBe(true);
+    expect(bootstrap.requestIntake.backendSubmissionEnabled).toBe(true);
+    expect(bootstrap.requestIntake.fileTransferEnabled).toBe(true);
+    expect(bootstrap.requestIntake.authentication).toBe("cloudflare-access");
+    expect(bootstrap.requestIntake.rightsFirst).toBe(true);
+    expect(bootstrap.requestIntake.independentRightsReviewRequired).toBe(true);
+    expect(bootstrap.requestIntake.submissionAuthority).toBe(false);
+    expect(bootstrap.requestIntake.processingAuthority).toBe(false);
+    expect(bootstrap.requestIntake.publicationAuthority).toBe(false);
+    expect(bootstrap.requestIntake.commercialAuthority).toBe(false);
   });
 
   it("keeps runtime configuration separate from production authority", () => {
@@ -42,6 +69,8 @@ describe("TMG enterprise UI bootstrap", () => {
         TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED: "true",
         TMG_TENANT_USAGE_LEDGER_ENABLED: "true",
         TMG_PROVIDER_ACCEPTANCE_STATE: "accepted_preview",
+        TMG_INTAKE_ENABLED: "true",
+        TMG_CONTROL_DB_BINDING_STATE: "provisioned",
       }),
     );
 
@@ -50,12 +79,14 @@ describe("TMG enterprise UI bootstrap", () => {
     expect(bootstrap.runtime.ingestWorkflowEnabled).toBe(true);
     expect(bootstrap.runtime.externalProviderEgressEnabled).toBe(true);
     expect(bootstrap.runtime.tenantUsageLedgerEnabled).toBe(true);
+    expect(bootstrap.requestIntake.authenticatedIntakeEnabled).toBe(true);
 
     expect(bootstrap.release.activationAuthorized).toBe(false);
     expect(bootstrap.release.externalProviderEgressAuthorized).toBe(false);
     expect(bootstrap.release.providerPromotionAuthorized).toBe(false);
     expect(bootstrap.release.billingAuthorized).toBe(false);
     expect(bootstrap.release.commercialUseAuthorized).toBe(false);
+    expect(bootstrap.requestIntake.processingAuthority).toBe(false);
   });
 
   it("exposes only bounded, secret-free bootstrap data", () => {
@@ -65,6 +96,7 @@ describe("TMG enterprise UI bootstrap", () => {
     expect(serialized).not.toMatch(/token/i);
     expect(serialized).not.toMatch(/bucket_name/i);
     expect(serialized).not.toMatch(/credential/i);
+    expect(serialized).not.toMatch(/database[_-]?id/i);
   });
 
   it("tracks the S0/S1 implemented-unactivated release boundary", () => {
