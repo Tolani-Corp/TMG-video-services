@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   checklistTemplate,
   compileProductionPlan,
+  normalizeChecklistReferenceValue,
   productionInputObjectKey,
   requiredChecklistSatisfied,
   safeUploadFileName,
@@ -38,6 +39,13 @@ function checklist(statusForRequired: "pending" | "completed"): ProductionCheckl
     ...(item.kind === "rights_evidence" && statusForRequired === "completed"
       ? { referenceValue: "rights:acme:launch-2026" }
       : {}),
+    ...(item.kind === "distribution_targets" && statusForRequired === "completed"
+      ? {
+          referenceValue: normalizeChecklistReferenceValue("distribution_targets", {
+            targets: [{ platform: "general_master", surface: "master", usage: "undecided" }],
+          }),
+        }
+      : {}),
     updatedAt: now,
   }));
 }
@@ -57,12 +65,13 @@ function snapshot(status: "draft" | "ready", requiredStatus: "pending" | "comple
 }
 
 describe("checklist production request", () => {
-  it("requires brief, source media, and rights evidence before submission", () => {
+  it("requires brief, source media, rights evidence, and distribution targets before submission", () => {
     const template = checklistTemplate();
     expect(template.filter((item) => item.required).map((item) => item.kind)).toEqual([
       "project_brief",
       "source_media",
       "rights_evidence",
+      "distribution_targets",
     ]);
     expect(requiredChecklistSatisfied(snapshot("draft", "pending"))).toBe(false);
   });
@@ -76,10 +85,15 @@ describe("checklist production request", () => {
       "thumbnail_generation",
       "caption_generation",
     ]);
+    expect(plan.distributionTargets).toEqual([
+      { platform: "general_master", surface: "master", usage: "undecided" },
+    ]);
     expect(plan.governance).toEqual({
       rightsEvidenceRequired: true,
       publicationAuthority: false,
       externalDistributionAuthority: false,
+      crawlAuthorizationRequired: false,
+      discoveredAssetReuseRequiresRightsEvidence: true,
     });
     expect(plan.sourceInputs.find((item) => item.kind === "source_media")?.artifacts).toHaveLength(1);
   });
