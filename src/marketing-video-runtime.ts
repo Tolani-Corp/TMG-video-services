@@ -1,3 +1,4 @@
+import { NonRetryableError } from "cloudflare:workers";
 import type { MarketingCreativeBrief, MarketingCreativeVariant } from "./marketing-creative";
 
 const MAX_GENERATED_VIDEO_BYTES = 250 * 1024 * 1024;
@@ -88,6 +89,14 @@ function safeVariantId(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 160);
 }
 
+function normalizeProviderError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/AiGatewayError:\s*2021:\s*Insufficient AI Gateway credits/i.test(message)) {
+    return new NonRetryableError("marketing_video_provider_billing_hold:insufficient_ai_gateway_credits");
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
 export function marketingVideoObjectKey(
   tenantId: string,
   requestId: string,
@@ -114,17 +123,23 @@ export async function generateMarketingVideoVariant(
     throw new Error("marketing generation plan cannot disable the provider safety filter");
   }
 
-  const response: unknown = await ai.run(ALLOWED_VIDEO_PROVIDER, {
-    prompt: input.variant.videoPrompt,
-    duration: generation.durationSeconds,
-    resolution: generation.resolution,
-    aspect_ratio: generation.aspectRatio,
-    seed: generation.seed,
-    draft: generation.draft,
-    save_audio: generation.saveAudio,
-    prompt_upsampling: true,
-    disable_safety_filter: false,
-  });
+  let response: unknown;
+  try {
+    response = await ai.run(ALLOWED_VIDEO_PROVIDER, {
+      prompt: input.variant.videoPrompt,
+      duration: generation.durationSeconds,
+      resolution: generation.resolution,
+      aspect_ratio: generation.aspectRatio,
+      seed: generation.seed,
+      draft: generation.draft,
+      save_audio: generation.saveAudio,
+      prompt_upsampling: true,
+      disable_safety_filter: false,
+    });
+  } catch (error) {
+    throw normalizeProviderError(error);
+  }
+
   const videoUrl = generatedVideoUrl(response);
   const videoResponse = await fetch(videoUrl, {
     redirect: "error",
