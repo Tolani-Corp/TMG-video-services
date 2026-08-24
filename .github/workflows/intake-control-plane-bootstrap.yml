@@ -1,12 +1,6 @@
 name: TMG Intake Control Plane Bootstrap
 
 on:
-  push:
-    branches:
-      - feat/authenticated-intake-job-control-v1
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -14,12 +8,11 @@ permissions:
   statuses: write
 
 concurrency:
-  group: tmg-intake-control-plane-bootstrap-${{ github.event.pull_request.head.ref || github.ref }}
-  cancel-in-progress: false
+  group: tmg-intake-control-plane-bootstrap
+  cancel-in-progress: true
 
 jobs:
   bootstrap:
-    if: ${{ github.event_name != 'pull_request' || github.head_ref == 'feat/authenticated-intake-job-control-v1' }}
     environment: development
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -28,12 +21,10 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
       D1_NAME: tmg-video-control-dev
       CONSOLE_HOST: console.tolanimediagroup.com
-      BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BOOTSTRAP_SHA: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.BOOTSTRAP_SHA }}
 
       - name: Verify Cloudflare credential contract
         shell: bash
@@ -91,15 +82,23 @@ jobs:
             echo "::warning::D1 control-plane access unavailable (HTTP ${HTTP_CODE}); binding/deployment remains blocked"
           fi
 
-      - name: Probe console zone
+      - name: Allow Cloudflare API rate bucket to recover
+        run: sleep 5
+
+      - name: Probe console zone with bounded retry
         id: zone
         shell: bash
         run: |
           set -u
-          HTTP_CODE="$(curl --silent --show-error -o zone.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Accept: application/json" \
-            "https://api.cloudflare.com/client/v4/zones?name=tolanimediagroup.com&account.id=${CLOUDFLARE_ACCOUNT_ID}")"
+          HTTP_CODE=000
+          for attempt in 1 2 3; do
+            HTTP_CODE="$(curl --silent --show-error -o zone.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Accept: application/json" \
+              "https://api.cloudflare.com/client/v4/zones?name=tolanimediagroup.com&account.id=${CLOUDFLARE_ACCOUNT_ID}")"
+            [ "${HTTP_CODE}" != "429" ] && break
+            sleep $((attempt * 5))
+          done
           AVAILABLE=false
           ZONE_ID=""
           if [ "${HTTP_CODE}" = "200" ]; then
@@ -114,24 +113,32 @@ jobs:
           echo "zone_id=${ZONE_ID}" >> "$GITHUB_OUTPUT"
           echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
           if [ "${AVAILABLE}" != "true" ]; then
-            echo "::warning::tolanimediagroup.com zone is not uniquely available to this token (HTTP ${HTTP_CODE})"
+            echo "::warning::tolanimediagroup.com zone not proven available to this token (HTTP ${HTTP_CODE})"
           fi
 
-      - name: Probe Access management capability
+      - name: Allow Cloudflare API rate bucket to recover again
+        run: sleep 5
+
+      - name: Probe Access management capability with bounded retry
         id: access
         shell: bash
         run: |
           set -u
-          HTTP_CODE="$(curl --silent --show-error -o access-apps.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Accept: application/json" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?per_page=1")"
+          HTTP_CODE=000
+          for attempt in 1 2 3; do
+            HTTP_CODE="$(curl --silent --show-error -o access-apps.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Accept: application/json" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?per_page=1")"
+            [ "${HTTP_CODE}" != "429" ] && break
+            sleep $((attempt * 5))
+          done
           AUTHORIZED=false
           [ "${HTTP_CODE}" = "200" ] && AUTHORIZED=true
           echo "authorized=${AUTHORIZED}" >> "$GITHUB_OUTPUT"
           echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
           if [ "${AUTHORIZED}" != "true" ]; then
-            echo "::warning::Access application management unavailable (HTTP ${HTTP_CODE}); console activation remains blocked"
+            echo "::warning::Access application management not proven (HTTP ${HTTP_CODE}); console activation remains blocked"
           fi
 
       - name: Write bootstrap evidence
@@ -150,33 +157,16 @@ jobs:
           node -e '
             const fs=require("fs");
             fs.writeFileSync("intake-bootstrap-evidence.json", JSON.stringify({
-              schemaVersion:"1.1.0",
+              schemaVersion:"1.2.0",
               sha:process.env.BOOTSTRAP_SHA,
-              database:{
-                name:process.env.D1_NAME,
-                id:process.env.D1_DATABASE_ID || null,
-                authorized:process.env.D1_AUTHORIZED === "true",
-                createdThisRun:process.env.D1_CREATED === "true",
-                httpCode:Number(process.env.D1_HTTP_CODE || 0),
-                primaryLocationHint:"enam",
-                readReplication:"disabled"
-              },
-              zone:{
-                name:"tolanimediagroup.com",
-                id:process.env.ZONE_ID || null,
-                available:process.env.ZONE_AVAILABLE === "true",
-                httpCode:Number(process.env.ZONE_HTTP_CODE || 0)
-              },
-              access:{
-                authorized:process.env.ACCESS_AUTHORIZED === "true",
-                httpCode:Number(process.env.ACCESS_HTTP_CODE || 0),
-                policyModel:"cloudflare-account-members"
-              },
+              database:{name:process.env.D1_NAME,id:process.env.D1_DATABASE_ID||null,authorized:process.env.D1_AUTHORIZED==="true",createdThisRun:process.env.D1_CREATED==="true",httpCode:Number(process.env.D1_HTTP_CODE||0),primaryLocationHint:"enam",readReplication:"disabled"},
+              zone:{name:"tolanimediagroup.com",id:process.env.ZONE_ID||null,available:process.env.ZONE_AVAILABLE==="true",httpCode:Number(process.env.ZONE_HTTP_CODE||0)},
+              access:{authorized:process.env.ACCESS_AUTHORIZED==="true",httpCode:Number(process.env.ACCESS_HTTP_CODE||0),policyModel:"cloudflare-account-members"},
               consoleHost:process.env.CONSOLE_HOST,
               customDomainAttached:false,
               workerDeployed:false,
               productionAuthority:false
-            }, null, 2));
+            },null,2));
           '
 
       - name: Upload bootstrap evidence
