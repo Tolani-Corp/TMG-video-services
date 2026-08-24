@@ -87,6 +87,9 @@ async function readAndInspect(
   if (inspection.fileSize !== object.size) {
     throw new Error(`${input.label} technical inspection byte count does not match R2 evidence`);
   }
+  if (inspection.format !== input.mimeType) {
+    throw new Error(`${input.label} decoded format does not match the authorized MIME type`);
+  }
   return { sha256, bytes: object.size, inspection };
 }
 
