@@ -45,95 +45,156 @@ jobs:
         id: d1
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
-          curl --fail-with-body --silent --show-error \
+          HTTP_CODE="$(curl --silent --show-error -o d1-list.json -w '%{http_code}' \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Accept: application/json" \
-            "${API}?name=${D1_NAME}&per_page=100" > d1-list.json
+            "${API}?name=${D1_NAME}&per_page=100")"
 
-          DB_ID="$(node -e '
-            const fs=require("fs");
-            const j=JSON.parse(fs.readFileSync("d1-list.json","utf8"));
-            const row=(j.result||[]).find((x)=>x.name===process.env.D1_NAME);
-            if(row?.uuid) process.stdout.write(row.uuid);
-          ')"
-
+          AUTHORIZED=false
           CREATED=false
-          if [ -z "${DB_ID}" ]; then
-            curl --fail-with-body --silent --show-error \
-              -X POST \
-              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-              -H "Content-Type: application/json" \
-              "${API}" \
-              --data "{\"name\":\"${D1_NAME}\",\"primary_location_hint\":\"enam\",\"read_replication\":{\"mode\":\"disabled\"}}" \
-              > d1-create.json
+          DB_ID=""
+          if [ "${HTTP_CODE}" = "200" ]; then
+            AUTHORIZED=true
             DB_ID="$(node -e '
               const fs=require("fs");
-              const j=JSON.parse(fs.readFileSync("d1-create.json","utf8"));
-              if(!j.success || !j.result?.uuid) process.exit(3);
-              process.stdout.write(j.result.uuid);
+              const j=JSON.parse(fs.readFileSync("d1-list.json","utf8"));
+              const row=(j.result||[]).find((x)=>x.name===process.env.D1_NAME);
+              if(row?.uuid) process.stdout.write(row.uuid);
             ')"
-            CREATED=true
+            if [ -z "${DB_ID}" ]; then
+              CREATE_CODE="$(curl --silent --show-error -o d1-create.json -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                "${API}" \
+                --data "{\"name\":\"${D1_NAME}\",\"primary_location_hint\":\"enam\",\"read_replication\":{\"mode\":\"disabled\"}}")"
+              if [ "${CREATE_CODE}" = "200" ]; then
+                DB_ID="$(node -e '
+                  const fs=require("fs");
+                  const j=JSON.parse(fs.readFileSync("d1-create.json","utf8"));
+                  if(j.success && j.result?.uuid) process.stdout.write(j.result.uuid);
+                ')"
+                CREATED=true
+              else
+                AUTHORIZED=false
+              fi
+            fi
           fi
 
+          echo "authorized=${AUTHORIZED}" >> "$GITHUB_OUTPUT"
           echo "database_id=${DB_ID}" >> "$GITHUB_OUTPUT"
           echo "created=${CREATED}" >> "$GITHUB_OUTPUT"
+          echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+          if [ "${AUTHORIZED}" != "true" ]; then
+            echo "::warning::D1 control-plane access unavailable (HTTP ${HTTP_CODE}); binding/deployment remains blocked"
+          fi
 
+      - name: Probe console zone
+        id: zone
+        shell: bash
+        run: |
+          set -u
+          HTTP_CODE="$(curl --silent --show-error -o zone.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "https://api.cloudflare.com/client/v4/zones?name=tolanimediagroup.com&account.id=${CLOUDFLARE_ACCOUNT_ID}")"
+          AVAILABLE=false
+          ZONE_ID=""
+          if [ "${HTTP_CODE}" = "200" ]; then
+            ZONE_ID="$(node -e '
+              const fs=require("fs");
+              const j=JSON.parse(fs.readFileSync("zone.json","utf8"));
+              if(j.success && Array.isArray(j.result) && j.result.length===1) process.stdout.write(j.result[0].id || "");
+            ')"
+            [ -n "${ZONE_ID}" ] && AVAILABLE=true
+          fi
+          echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+          echo "zone_id=${ZONE_ID}" >> "$GITHUB_OUTPUT"
+          echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+          if [ "${AVAILABLE}" != "true" ]; then
+            echo "::warning::tolanimediagroup.com zone is not uniquely available to this token (HTTP ${HTTP_CODE})"
+          fi
+
+      - name: Probe Access management capability
+        id: access
+        shell: bash
+        run: |
+          set -u
+          HTTP_CODE="$(curl --silent --show-error -o access-apps.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?per_page=1")"
+          AUTHORIZED=false
+          [ "${HTTP_CODE}" = "200" ] && AUTHORIZED=true
+          echo "authorized=${AUTHORIZED}" >> "$GITHUB_OUTPUT"
+          echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+          if [ "${AUTHORIZED}" != "true" ]; then
+            echo "::warning::Access application management unavailable (HTTP ${HTTP_CODE}); console activation remains blocked"
+          fi
+
+      - name: Write bootstrap evidence
+        shell: bash
+        env:
+          D1_AUTHORIZED: ${{ steps.d1.outputs.authorized }}
+          D1_DATABASE_ID: ${{ steps.d1.outputs.database_id }}
+          D1_CREATED: ${{ steps.d1.outputs.created }}
+          D1_HTTP_CODE: ${{ steps.d1.outputs.http_code }}
+          ZONE_AVAILABLE: ${{ steps.zone.outputs.available }}
+          ZONE_ID: ${{ steps.zone.outputs.zone_id }}
+          ZONE_HTTP_CODE: ${{ steps.zone.outputs.http_code }}
+          ACCESS_AUTHORIZED: ${{ steps.access.outputs.authorized }}
+          ACCESS_HTTP_CODE: ${{ steps.access.outputs.http_code }}
+        run: |
           node -e '
             const fs=require("fs");
             fs.writeFileSync("intake-bootstrap-evidence.json", JSON.stringify({
-              schemaVersion:"1.0.0",
+              schemaVersion:"1.1.0",
               sha:process.env.BOOTSTRAP_SHA,
-              databaseName:process.env.D1_NAME,
-              databaseId:process.argv[1],
-              createdThisRun:process.argv[2]==="true",
-              primaryLocationHint:"enam",
-              readReplication:"disabled",
+              database:{
+                name:process.env.D1_NAME,
+                id:process.env.D1_DATABASE_ID || null,
+                authorized:process.env.D1_AUTHORIZED === "true",
+                createdThisRun:process.env.D1_CREATED === "true",
+                httpCode:Number(process.env.D1_HTTP_CODE || 0),
+                primaryLocationHint:"enam",
+                readReplication:"disabled"
+              },
+              zone:{
+                name:"tolanimediagroup.com",
+                id:process.env.ZONE_ID || null,
+                available:process.env.ZONE_AVAILABLE === "true",
+                httpCode:Number(process.env.ZONE_HTTP_CODE || 0)
+              },
+              access:{
+                authorized:process.env.ACCESS_AUTHORIZED === "true",
+                httpCode:Number(process.env.ACCESS_HTTP_CODE || 0),
+                policyModel:"cloudflare-account-members"
+              },
               consoleHost:process.env.CONSOLE_HOST,
-              accessRequired:true,
               customDomainAttached:false,
               workerDeployed:false,
               productionAuthority:false
             }, null, 2));
-          ' "${DB_ID}" "${CREATED}"
-
-      - name: Validate console zone exists without mutating DNS
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail-with-body --silent --show-error \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Accept: application/json" \
-            "https://api.cloudflare.com/client/v4/zones?name=tolanimediagroup.com&account.id=${CLOUDFLARE_ACCOUNT_ID}" \
-            > zone.json
-          node -e '
-            const fs=require("fs");
-            const j=JSON.parse(fs.readFileSync("zone.json","utf8"));
-            if(!j.success || !Array.isArray(j.result) || j.result.length!==1) {
-              console.error("tolanimediagroup.com zone is not uniquely available in this Cloudflare account");
-              process.exit(4);
-            }
           '
 
-      - name: Probe Access management capability without creating an app
-        shell: bash
-        run: |
-          set -euo pipefail
-          HTTP_CODE="$(curl --silent --show-error \
-            -o access-apps.json \
-            -w '%{http_code}' \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Accept: application/json" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?per_page=1")"
-          if [ "${HTTP_CODE}" != "200" ]; then
-            echo "::error::Cloudflare token cannot read Access applications (HTTP ${HTTP_CODE}); domain activation must remain blocked"
-            exit 5
-          fi
-
       - name: Upload bootstrap evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tmg-intake-bootstrap-${{ github.run_id }}
           retention-days: 14
           path: intake-bootstrap-evidence.json
+
+      - name: Enforce activation prerequisites
+        shell: bash
+        env:
+          D1_AUTHORIZED: ${{ steps.d1.outputs.authorized }}
+          ZONE_AVAILABLE: ${{ steps.zone.outputs.available }}
+          ACCESS_AUTHORIZED: ${{ steps.access.outputs.authorized }}
+        run: |
+          set -euo pipefail
+          [ "${D1_AUTHORIZED}" = "true" ] || { echo "::error::D1 permission is required"; exit 10; }
+          [ "${ZONE_AVAILABLE}" = "true" ] || { echo "::error::tolanimediagroup.com Cloudflare zone is required"; exit 11; }
+          [ "${ACCESS_AUTHORIZED}" = "true" ] || { echo "::error::Access Apps and Policies permission is required"; exit 12; }
