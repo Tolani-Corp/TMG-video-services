@@ -3,6 +3,13 @@ import type {
   SourceContextReference,
 } from "./production-request";
 
+export const FIRECRAWL_MARKETING_FORMATS = [
+  "markdown",
+  "links",
+  "images",
+  "branding",
+] as const;
+
 export interface FirecrawlMarketingCrawlRequest {
   url: string;
   includePaths: string[];
@@ -16,10 +23,11 @@ export interface FirecrawlMarketingCrawlRequest {
   allowSubdomains: boolean;
   ignoreRobotsTxt: false;
   scrapeOptions: {
-    formats: ["markdown"];
+    formats: Array<(typeof FIRECRAWL_MARKETING_FORMATS)[number]>;
     onlyMainContent: false;
     removeBase64Images: true;
     blockAds: true;
+    storeInCache: false;
   };
   zeroDataRetention: true;
 }
@@ -85,10 +93,11 @@ function buildSourcePlan(source: SourceContextReference): MarketingDiscoverySour
       allowSubdomains: source.crawlScope.allowSubdomains,
       ignoreRobotsTxt: false,
       scrapeOptions: {
-        formats: ["markdown"],
+        formats: [...FIRECRAWL_MARKETING_FORMATS],
         onlyMainContent: false,
         removeBase64Images: true,
         blockAds: true,
+        storeInCache: false,
       },
       zeroDataRetention: true,
     },
