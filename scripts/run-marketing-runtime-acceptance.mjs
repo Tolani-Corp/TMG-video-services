@@ -86,29 +86,38 @@ const submit = await requestJson(`/v1/production/requests/${requestId}/submit`, 
 const workflowInstanceId = submit.workflowInstanceId;
 if (!workflowInstanceId) throw new Error("acceptance submit did not return workflowInstanceId");
 
+function writeEvidence(finalStatus) {
+  const evidence = {
+    schemaVersion: "tmg.marketing-runtime-acceptance-request.v1",
+    requestId,
+    tenantId: "marketing_acceptance",
+    workflowInstanceId,
+    finalStatus,
+    distributionTargets: ["tiktok.organic.v1", "youtube.short.v1", "web.hero.v1"],
+    publicationAuthority: false,
+    externalDistributionAuthority: false,
+  };
+  fs.writeFileSync("marketing-acceptance-request.json", JSON.stringify(evidence, null, 2) + "\n");
+  return evidence;
+}
+
+writeEvidence("submitted");
+
 let finalSnapshot;
 for (let attempt = 0; attempt < 360; attempt += 1) {
   const state = await requestJson(`/v1/production/requests/${requestId}`);
   finalSnapshot = state.productionRequest;
   if (finalSnapshot?.status === "completed") break;
   if (finalSnapshot?.status === "failed") {
+    writeEvidence("failed");
     throw new Error("marketing runtime acceptance request entered failed state");
   }
   await sleep(5000);
 }
 if (finalSnapshot?.status !== "completed") {
+  writeEvidence(finalSnapshot?.status ?? "unknown");
   throw new Error(`marketing runtime acceptance timed out in state ${String(finalSnapshot?.status)}`);
 }
 
-const evidence = {
-  schemaVersion: "tmg.marketing-runtime-acceptance-request.v1",
-  requestId,
-  tenantId: "marketing_acceptance",
-  workflowInstanceId,
-  finalStatus: finalSnapshot.status,
-  distributionTargets: ["tiktok.organic.v1", "youtube.short.v1", "web.hero.v1"],
-  publicationAuthority: false,
-  externalDistributionAuthority: false,
-};
-fs.writeFileSync("marketing-acceptance-request.json", JSON.stringify(evidence, null, 2) + "\n");
+const evidence = writeEvidence(finalSnapshot.status);
 console.log(JSON.stringify(evidence));
