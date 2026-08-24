@@ -48,6 +48,7 @@ jobs:
     timeout-minutes: 50
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_AI_GATEWAY_KEY: ${{ secrets.CLOUDFLARE_AI_GATEWAY_KEY }}
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
       FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY || secrets.FIRECRAWL_KEY }}
       ACCEPTANCE_SHA: ${{ github.sha }}
@@ -88,7 +89,20 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN in development environment"; exit 2; }
+          test -n "${CLOUDFLARE_AI_GATEWAY_KEY:-}" || { echo "::error::Missing CLOUDFLARE_AI_GATEWAY_KEY in development environment"; exit 2; }
           test -n "${FIRECRAWL_API_KEY:-}" || { echo "::error::Missing FIRECRAWL_API_KEY/FIRECRAWL_KEY in development environment"; exit 2; }
+
+          verify_json="$(curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+            -H "Authorization: Bearer ${CLOUDFLARE_AI_GATEWAY_KEY}")"
+          VERIFY_JSON="${verify_json}" node - <<'NODE'
+          const payload = JSON.parse(process.env.VERIFY_JSON || "null");
+          if (payload?.success !== true || payload?.result?.status !== "active") {
+            console.error("::error::CLOUDFLARE_AI_GATEWAY_KEY is not an active Cloudflare API token");
+            process.exit(3);
+          }
+          console.log("Cloudflare AI Gateway development token is active");
+          NODE
 
       - name: Install and validate exact head
         shell: bash
