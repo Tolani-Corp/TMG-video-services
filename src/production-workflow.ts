@@ -60,6 +60,13 @@ async function putImmutableJson(bucket: R2Bucket, key: string, value: unknown): 
   });
 }
 
+function requireProductionRequests(env: Env): NonNullable<Env["PRODUCTION_REQUESTS"]> {
+  if (!env.PRODUCTION_REQUESTS) {
+    throw new Error("production request coordinator binding is not configured in this environment");
+  }
+  return env.PRODUCTION_REQUESTS;
+}
+
 export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> {
   async run(
     event: WorkflowEvent<ProductionPlan>,
@@ -77,7 +84,7 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
     });
 
     await step.do("bind processing state", async () => {
-      const coordinator = this.env.PRODUCTION_REQUESTS.getByName(plan.requestId);
+      const coordinator = requireProductionRequests(this.env).getByName(plan.requestId);
       await coordinator.markProcessing(event.instanceId, event.timestamp.toISOString());
     });
 
@@ -106,7 +113,7 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
     });
 
     await step.do("hold until governed production skills are active", async () => {
-      const coordinator = this.env.PRODUCTION_REQUESTS.getByName(plan.requestId);
+      const coordinator = requireProductionRequests(this.env).getByName(plan.requestId);
       await coordinator.recordWorkflowHold(
         event.instanceId,
         "production_skill_adapters_pending",
