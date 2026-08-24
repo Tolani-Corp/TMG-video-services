@@ -133,14 +133,25 @@ afterEach(() => {
 });
 
 describe("TMG Marketing Runtime v1", () => {
-  it("starts and normalizes a governed Firecrawl crawl", async () => {
+  it("maps, ranks, and executes a bounded governed Firecrawl crawl", async () => {
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        success: true,
+        links: [
+          { url: "https://acme.example/", title: "Acme" },
+          { url: "https://acme.example/features", title: "Features for product teams" },
+          { url: "https://acme.example/pricing", title: "Pricing" },
+          { url: "https://acme.example/case-studies/alpha", title: "Customer story" },
+          { url: "https://acme.example/privacy", title: "Privacy" },
+          { url: "https://outside.example/features", title: "External" },
+        ],
+      }))
       .mockResolvedValueOnce(Response.json({ success: true, id: "crawl-1" }))
       .mockResolvedValueOnce(Response.json({
         status: "completed",
-        total: 1,
-        completed: 1,
-        creditsUsed: 1,
+        total: 3,
+        completed: 3,
+        creditsUsed: 3,
         data: [{
           markdown: "# Acme\nShip product work faster.\n- Workflow automation\nGet started",
           links: ["https://acme.example/features"],
@@ -170,14 +181,27 @@ describe("TMG Marketing Runtime v1", () => {
     const snapshot = await getMarketingCrawlSnapshot(env, started.jobId);
 
     expect(started.jobId).toBe("crawl-1");
+    expect(started.discovery.requestedMode).toBe("map_rank_crawl");
+    expect(started.discovery.effectiveMode).toBe("map_rank_crawl");
+    expect(started.discovery.selectedUrls).toContain("https://acme.example/features");
+    expect(started.discovery.selectedUrls).toContain("https://acme.example/pricing");
+    expect(started.discovery.selectedUrls).not.toContain("https://acme.example/privacy");
+    expect(started.discovery.selectedUrls.some((url) => url.includes("outside.example"))).toBe(false);
     expect(snapshot.status).toBe("completed");
     expect(snapshot.pages[0]?.branding?.logo).toBe("https://acme.example/logo.svg");
     expect(snapshot.pages[0]?.images).toEqual(["https://acme.example/product.webp"]);
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toContain('"branding"');
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toContain('"ignoreRobotsTxt":false');
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v2/map");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/v2/crawl");
+    const crawlBody = String(fetchMock.mock.calls[1]?.[1]?.body);
+    expect(crawlBody).toContain('"branding"');
+    expect(crawlBody).toContain('"ignoreRobotsTxt":false');
+    expect(crawlBody).toContain("features");
+    expect(crawlBody).toContain("pricing");
+    expect(crawlBody).not.toContain("privacy");
   });
 
-  it("compiles crawl evidence into context, creative variants, and reviewable social copy", () => {
+  it("compiles context into differentiated preview plans and reviewable social copy", () => {
     const discovery = discoveryPlan();
     const context = compileCampaignContextManifest({
       discoveryPlan: discovery,
@@ -191,7 +215,7 @@ describe("TMG Marketing Runtime v1", () => {
           sourceUrl: "https://acme.example/",
           title: "Acme",
           description: "Ship product work faster with governed workflow automation.",
-          markdown: "# Move work forward\n- Workflow automation\n- Team visibility\nGet started",
+          markdown: "# Move work forward\n## Automate the busywork\n- Workflow automation\n- Team visibility\nGet started",
           links: [],
           images: ["https://acme.example/product.webp"],
           branding: {
@@ -226,7 +250,19 @@ describe("TMG Marketing Runtime v1", () => {
       "9:16",
       "16:9",
     ]);
+    expect(brief.variants.map((variant) => variant.creativeAngle)).toEqual([
+      "hook_first",
+      "hook_first",
+      "product_value",
+    ]);
     expect(brief.variants[0]?.videoPrompt).toMatch(/No invented awards/);
+    expect(brief.variants[0]?.generation.phase).toBe("preview");
+    expect(brief.variants[0]?.generation.resolution).toBe("720p");
+    expect(brief.variants[0]?.generation.safetyFilterEnabled).toBe(true);
+    expect(brief.variants[0]?.generation.seed).toBeTypeOf("number");
+    expect(brief.variants[2]?.generation.saveAudio).toBe(false);
+    expect(brief.contextQuality.generationEligible).toBe(true);
+    expect(brief.contextQuality.score).toBeGreaterThanOrEqual(45);
     expect(brief.humanReviewRequired).toBe(true);
 
     const copy = compileMarketingSocialCopy(brief);
