@@ -9,12 +9,15 @@ export interface MarketingVideoArtifact {
   variantId: string;
   targetProfileId: string;
   target: MarketingCreativeVariant["target"];
+  creativeAngle: MarketingCreativeVariant["creativeAngle"];
   objectKey: string;
   contentType: string;
   bytes: number;
   provider: "cloudflare_workers_ai";
   model: "pruna/p-video";
   generationMode: "brand_context_conditioned";
+  renderPhase: "preview";
+  seed: number;
   humanReviewRequired: true;
   publicationAuthority: false;
   createdAt: string;
@@ -103,13 +106,22 @@ export async function generateMarketingVideoVariant(
   },
 ): Promise<MarketingVideoArtifact> {
   const ai = requireVideoRuntime(env);
+  const generation = input.variant.generation;
+  if (generation.mode !== "text_to_video" || generation.phase !== "preview") {
+    throw new Error("unsupported marketing generation plan");
+  }
+  if (!generation.safetyFilterEnabled) {
+    throw new Error("marketing generation plan cannot disable the provider safety filter");
+  }
+
   const response: unknown = await ai.run(ALLOWED_VIDEO_PROVIDER, {
     prompt: input.variant.videoPrompt,
-    duration: input.variant.targetProfile.durationSeconds,
-    resolution: "720p",
-    aspect_ratio: input.variant.targetProfile.aspectRatio,
-    draft: true,
-    save_audio: true,
+    duration: generation.durationSeconds,
+    resolution: generation.resolution,
+    aspect_ratio: generation.aspectRatio,
+    seed: generation.seed,
+    draft: generation.draft,
+    save_audio: generation.saveAudio,
     prompt_upsampling: true,
     disable_safety_filter: false,
   });
@@ -125,12 +137,15 @@ export async function generateMarketingVideoVariant(
   if (!contentType.startsWith("video/")) {
     throw new Error(`generated video returned unsupported content type: ${contentType || "missing"}`);
   }
-  const declaredBytes = Number(videoResponse.headers.get("content-length") ?? 0);
-  if (!Number.isFinite(declaredBytes) || declaredBytes <= 0) {
-    throw new Error("generated video response must declare a bounded content length");
-  }
-  if (declaredBytes > MAX_GENERATED_VIDEO_BYTES) {
-    throw new Error("generated video exceeds the v1 size limit");
+  const declaredBytesHeader = videoResponse.headers.get("content-length");
+  if (declaredBytesHeader) {
+    const declaredBytes = Number(declaredBytesHeader);
+    if (!Number.isFinite(declaredBytes) || declaredBytes <= 0) {
+      throw new Error("generated video returned an invalid content length");
+    }
+    if (declaredBytes > MAX_GENERATED_VIDEO_BYTES) {
+      throw new Error("generated video exceeds the v1 size limit");
+    }
   }
 
   const objectKey = marketingVideoObjectKey(
@@ -145,11 +160,21 @@ export async function generateMarketingVideoVariant(
       tenantId: input.tenantId,
       variantId: input.variant.variantId,
       targetProfileId: input.variant.targetProfile.profileId,
+      creativeAngle: input.variant.creativeAngle,
       provider: ALLOWED_VIDEO_PROVIDER,
+      renderPhase: generation.phase,
+      seed: String(generation.seed),
       publicationAuthority: "false",
       humanReviewRequired: "true",
     },
   });
+
+  const stored = await env.MEDIA_BUCKET.head(objectKey);
+  if (!stored) throw new Error("generated video was not persisted to R2");
+  if (stored.size <= 0 || stored.size > MAX_GENERATED_VIDEO_BYTES) {
+    await env.MEDIA_BUCKET.delete(objectKey).catch(() => undefined);
+    throw new Error("persisted generated video failed the v1 size boundary");
+  }
 
   return {
     schemaVersion: "tmg.marketing-video-artifact.v1",
@@ -157,12 +182,15 @@ export async function generateMarketingVideoVariant(
     variantId: input.variant.variantId,
     targetProfileId: input.variant.targetProfile.profileId,
     target: input.variant.target,
+    creativeAngle: input.variant.creativeAngle,
     objectKey,
     contentType,
-    bytes: declaredBytes,
+    bytes: stored.size,
     provider: "cloudflare_workers_ai",
     model: ALLOWED_VIDEO_PROVIDER,
     generationMode: "brand_context_conditioned",
+    renderPhase: "preview",
+    seed: generation.seed,
     humanReviewRequired: true,
     publicationAuthority: false,
     createdAt: input.createdAt ?? new Date().toISOString(),
@@ -173,6 +201,9 @@ export async function generateMarketingVideoSet(
   env: Env,
   brief: MarketingCreativeBrief,
 ): Promise<MarketingVideoArtifact[]> {
+  if (!brief.contextQuality.generationEligible) {
+    throw new Error(`campaign context quality is insufficient for video generation (${brief.contextQuality.score})`);
+  }
   const artifacts: MarketingVideoArtifact[] = [];
   for (const variant of brief.variants) {
     artifacts.push(await generateMarketingVideoVariant(env, {
