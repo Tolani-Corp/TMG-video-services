@@ -162,15 +162,14 @@ function collectBranding(pages: FirecrawlMarketingPage[]): {
     }),
     12,
   );
+  const name = readString(branding.name) ?? firstPage?.title;
+  const logoUrl = readString(branding.logo);
+  const colorScheme = readString(branding.colorScheme);
 
   return {
-    ...(readString(branding.name) ?? firstPage?.title
-      ? { name: readString(branding.name) ?? firstPage?.title }
-      : {}),
-    ...(readString(branding.logo) ? { logoUrl: readString(branding.logo) } : {}),
-    ...(readString(branding.colorScheme)
-      ? { colorScheme: readString(branding.colorScheme) }
-      : {}),
+    ...(name ? { name } : {}),
+    ...(logoUrl ? { logoUrl } : {}),
+    ...(colorScheme ? { colorScheme } : {}),
     colors,
     fonts,
   };
