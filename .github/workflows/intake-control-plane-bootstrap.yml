@@ -1,0 +1,133 @@
+name: TMG Intake Control Plane Bootstrap
+
+on:
+  push:
+    branches:
+      - feat/authenticated-intake-job-control-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-intake-control-plane-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      D1_NAME: tmg-video-control-dev
+      CONSOLE_HOST: console.tolanimediagroup.com
+      BOOTSTRAP_SHA: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Cloudflare credential contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+
+      - name: Discover or create D1 control database
+        id: d1
+        shell: bash
+        run: |
+          set -euo pipefail
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "${API}?name=${D1_NAME}&per_page=100" > d1-list.json
+
+          DB_ID="$(node -e '
+            const fs=require("fs");
+            const j=JSON.parse(fs.readFileSync("d1-list.json","utf8"));
+            const row=(j.result||[]).find((x)=>x.name===process.env.D1_NAME);
+            if(row?.uuid) process.stdout.write(row.uuid);
+          ')"
+
+          CREATED=false
+          if [ -z "${DB_ID}" ]; then
+            curl --fail-with-body --silent --show-error \
+              -X POST \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${API}" \
+              --data "{\"name\":\"${D1_NAME}\",\"primary_location_hint\":\"enam\",\"read_replication\":{\"mode\":\"disabled\"}}" \
+              > d1-create.json
+            DB_ID="$(node -e '
+              const fs=require("fs");
+              const j=JSON.parse(fs.readFileSync("d1-create.json","utf8"));
+              if(!j.success || !j.result?.uuid) process.exit(3);
+              process.stdout.write(j.result.uuid);
+            ')"
+            CREATED=true
+          fi
+
+          echo "database_id=${DB_ID}" >> "$GITHUB_OUTPUT"
+          echo "created=${CREATED}" >> "$GITHUB_OUTPUT"
+
+          node -e '
+            const fs=require("fs");
+            fs.writeFileSync("intake-bootstrap-evidence.json", JSON.stringify({
+              schemaVersion:"1.0.0",
+              sha:process.env.BOOTSTRAP_SHA,
+              databaseName:process.env.D1_NAME,
+              databaseId:process.argv[1],
+              createdThisRun:process.argv[2]==="true",
+              primaryLocationHint:"enam",
+              readReplication:"disabled",
+              consoleHost:process.env.CONSOLE_HOST,
+              accessRequired:true,
+              customDomainAttached:false,
+              workerDeployed:false,
+              productionAuthority:false
+            }, null, 2));
+          ' "${DB_ID}" "${CREATED}"
+
+      - name: Validate console zone exists without mutating DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "https://api.cloudflare.com/client/v4/zones?name=tolanimediagroup.com&account.id=${CLOUDFLARE_ACCOUNT_ID}" \
+            > zone.json
+          node -e '
+            const fs=require("fs");
+            const j=JSON.parse(fs.readFileSync("zone.json","utf8"));
+            if(!j.success || !Array.isArray(j.result) || j.result.length!==1) {
+              console.error("tolanimediagroup.com zone is not uniquely available in this Cloudflare account");
+              process.exit(4);
+            }
+          '
+
+      - name: Probe Access management capability without creating an app
+        shell: bash
+        run: |
+          set -euo pipefail
+          HTTP_CODE="$(curl --silent --show-error \
+            -o access-apps.json \
+            -w '%{http_code}' \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?per_page=1")"
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "::error::Cloudflare token cannot read Access applications (HTTP ${HTTP_CODE}); domain activation must remain blocked"
+            exit 5
+          fi
+
+      - name: Upload bootstrap evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-intake-bootstrap-${{ github.run_id }}
+          retention-days: 14
+          path: intake-bootstrap-evidence.json
