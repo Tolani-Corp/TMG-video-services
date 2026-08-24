@@ -1,5 +1,6 @@
 import { handleMcp } from "./mcp";
 import { vectorSearchBodySchema } from "./schemas";
+import { buildUiBootstrap } from "./ui-bootstrap";
 import { searchVideoMoments, VectorDimensionError } from "./vectorize";
 
 function json(body: unknown, status = 200): Response {
@@ -7,6 +8,8 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: {
       "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
     },
   });
 }
@@ -28,6 +31,13 @@ export default {
         publicApiEnabled: isEnabled(env.TMG_PUBLIC_API_ENABLED),
         mcpEnabled: isEnabled(env.TMG_MCP_ENABLED),
         policyVersion: env.TMG_POLICY_VERSION,
+        requestId,
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/ui/bootstrap") {
+      return json({
+        ...buildUiBootstrap(env),
         requestId,
       });
     }

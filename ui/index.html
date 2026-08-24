@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <meta name="description" content="TMG Video Services internal prototype control surface for governed video intelligence." />
+  <title>TMG Video Services — Internal Control Surface</title>
+  <link rel="stylesheet" href="/app.css" />
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="ambient ambient-a" aria-hidden="true"></div>
+  <div class="ambient ambient-b" aria-hidden="true"></div>
+
+  <header class="topbar" data-topbar>
+    <a class="brand" href="#overview" aria-label="TMG Video Services home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="brand-copy">
+        <strong>TMG</strong>
+        <small>Video Intelligence</small>
+      </span>
+    </a>
+
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-menu-toggle>
+      <span class="sr-only">Toggle navigation</span>
+      <span></span><span></span>
+    </button>
+
+    <nav id="primary-nav" class="primary-nav" aria-label="Primary" data-nav>
+      <a href="#overview">Overview</a>
+      <a href="#request">Request builder</a>
+      <a href="#operations">Operations</a>
+      <a href="#governance">Governance</a>
+    </nav>
+
+    <div class="header-status" aria-label="Current product gate">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>G0 · Internal prototype</span>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="overview" class="hero section-shell" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow"><span>Governed multimodal infrastructure</span><span class="eyebrow-rule"></span></div>
+        <h1 id="hero-title">Turn authorized video into <em>searchable intelligence.</em></h1>
+        <p class="hero-lede">Convert authorized video into governed, temporally searchable intelligence without expanding the rights attached to the source media.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#request">Build a request <span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="#operations">Inspect control plane</a>
+        </div>
+        <div class="trust-row" aria-label="System principles">
+          <span>Rights before retrieval</span>
+          <span>Lineage by default</span>
+          <span>Human release gates</span>
+        </div>
+      </div>
+
+      <aside class="command-panel" aria-labelledby="control-plane-title">
+        <div class="panel-kicker">Live control plane</div>
+        <div class="panel-heading-row">
+          <h2 id="control-plane-title">System posture</h2>
+          <span class="live-indicator" data-service-indicator>Checking</span>
+        </div>
+        <dl class="signal-list">
+          <div><dt>Policy</dt><dd data-policy-version>—</dd></div>
+          <div><dt>Embedding profile</dt><dd data-embedding-profile>—</dd></div>
+          <div><dt>Public API</dt><dd data-public-api>Gated</dd></div>
+          <div><dt>MCP</dt><dd data-mcp>Gated</dd></div>
+          <div><dt>External provider egress</dt><dd data-provider-egress>Gated</dd></div>
+        </dl>
+        <div class="authority-note">
+          <span class="authority-icon" aria-hidden="true">◇</span>
+          <p><strong>Runtime flags are not release authority.</strong> Production activation remains separately human-approved and capability-scoped.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="metrics-strip section-shell" aria-label="Architecture summary">
+      <div><strong>R2</strong><span>Physical evidence</span></div>
+      <div><strong>Workflow</strong><span>Durable ingestion</span></div>
+      <div><strong>Vectorize</strong><span>Temporal retrieval</span></div>
+      <div><strong>Rights</strong><span>Purpose-specific gates</span></div>
+    </section>
+
+    <section class="section-shell process-section" aria-labelledby="process-title">
+      <div class="section-intro">
+        <div class="eyebrow">Control plane</div>
+        <h2 id="process-title">One governed path from source to evidence.</h2>
+        <p>Every stage carries provenance, policy state, and purpose-specific authority forward. Similarity can identify a useful moment; it cannot authorize what happens next.</p>
+      </div>
+      <ol class="pipeline" aria-label="TMG processing pipeline">
+        <li><span>01</span><strong>Source</strong><small>Authorized media</small></li>
+        <li><span>02</span><strong>Evidence</strong><small>R2 + SHA-256</small></li>
+        <li><span>03</span><strong>Rights</strong><small>Purpose gates</small></li>
+        <li><span>04</span><strong>Segments</strong><small>Temporal lineage</small></li>
+        <li><span>05</span><strong>Embeddings</strong><small>Provider-bound</small></li>
+        <li><span>06</span><strong>Retrieval</strong><small>Policy filtered</small></li>
+        <li><span>07</span><strong>Output</strong><small>Human-authorized</small></li>
+      </ol>
+    </section>
+
+    <section id="request" class="section-shell request-section" aria-labelledby="request-title">
+      <div class="section-intro request-intro">
+        <div>
+          <div class="eyebrow">Request builder</div>
+          <h2 id="request-title">Define the work before media moves.</h2>
+          <p>Build a structured production brief and export a governed draft manifest. At G0, files remain in your browser and no request is submitted to TMG.</p>
+        </div>
+        <div class="completion-card" aria-live="polite">
+          <span>Manifest readiness</span>
+          <strong data-readiness>0%</strong>
+          <div class="progress-track" aria-hidden="true"><span data-progress></span></div>
+        </div>
+      </div>
+
+      <div class="request-layout">
+        <form id="request-form" class="request-form" novalidate>
+          <fieldset class="form-card">
+            <legend><span>01</span> Brief</legend>
+            <div class="field-grid two-col">
+              <label class="field">
+                <span>Request name</span>
+                <input name="requestName" type="text" maxlength="100" placeholder="Q4 product launch cutdown" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Audience</span>
+                <select name="audience">
+                  <option value="">Select audience</option>
+                  <option>Internal team</option>
+                  <option>Existing customer</option>
+                  <option>Prospective customer</option>
+                  <option>Partner / stakeholder</option>
+                  <option>Other</option>
+                </select>
+              </label>
+            </div>
+            <label class="field">
+              <span>Business goal</span>
+              <textarea name="businessGoal" rows="3" maxlength="600" placeholder="What should the finished media help the team accomplish?"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="form-card">
+            <legend><span>02</span> Source & rights</legend>
+            <label class="upload-zone" data-upload-zone>
+              <input class="sr-only" name="sourceFiles" type="file" multiple accept="video/*,audio/*,image/*,.pdf,.txt,.md,.srt,.vtt" />
+              <span class="upload-icon" aria-hidden="true">＋</span>
+              <strong>Add source references</strong>
+              <small>Video, audio, images, captions, transcripts, or production notes. File bytes stay local.</small>
+            </label>
+            <div class="file-list" data-file-list aria-live="polite"></div>
+            <label class="check-row rights-check">
+              <input name="rightsConfirmed" type="checkbox" />
+              <span><strong>Rights evidence is available for the intended processing.</strong><small>This does not create or expand media rights; TMG governance still validates purpose-specific authority.</small></span>
+            </label>
+          </fieldset>
+
+          <fieldset class="form-card">
+            <legend><span>03</span> Desired outputs</legend>
+            <div class="choice-grid" data-deliverables>
+              <label class="choice"><input type="checkbox" name="deliverables" value="custom-video" /><span><strong>Custom video</strong><small>Edited master or derivative</small></span></label>
+              <label class="choice"><input type="checkbox" name="deliverables" value="short-clips" /><span><strong>Short clips</strong><small>Moment-level cutdowns</small></span></label>
+              <label class="choice"><input type="checkbox" name="deliverables" value="snippets" /><span><strong>Snippets</strong><small>Micro-content extracts</small></span></label>
+              <label class="choice"><input type="checkbox" name="deliverables" value="thumbnails" /><span><strong>Thumbnails</strong><small>Visual selection package</small></span></label>
+              <label class="choice"><input type="checkbox" name="deliverables" value="captions-transcript" /><span><strong>Captions / transcript</strong><small>Text derivatives</small></span></label>
+              <label class="choice"><input type="checkbox" name="deliverables" value="searchable-package" /><span><strong>Searchable package</strong><small>Governed RAG-ready segments</small></span></label>
+            </div>
+            <p class="form-disclaimer">Output selections describe requested intent only. They are not represented as live commercial offerings at G0.</p>
+          </fieldset>
+
+          <fieldset class="form-card">
+            <legend><span>04</span> Output profile</legend>
+            <div class="field-grid three-col">
+              <label class="field"><span>Primary format</span><select name="format"><option value="">Select</option><option>16:9 landscape</option><option>9:16 vertical</option><option>1:1 square</option><option>4:5 portrait</option><option>Multi-format</option></select></label>
+              <label class="field"><span>Target duration</span><select name="duration"><option value="">Select</option><option>&lt; 15 sec</option><option>15–30 sec</option><option>30–60 sec</option><option>1–3 min</option><option>3+ min</option><option>Varies by output</option></select></label>
+              <label class="field"><span>Priority</span><select name="priority"><option>Standard</option><option>High</option><option>Critical review</option></select></label>
+            </div>
+            <label class="field"><span>Creative / technical notes</span><textarea name="notes" rows="4" maxlength="1200" placeholder="Tone, pacing, platform constraints, required moments, exclusions, accessibility requirements, brand considerations…"></textarea></label>
+          </fieldset>
+        </form>
+
+        <aside class="manifest-panel" aria-labelledby="manifest-title">
+          <div class="manifest-sticky">
+            <div class="panel-kicker">Draft manifest</div>
+            <h3 id="manifest-title">Request checklist</h3>
+            <ul class="checklist" data-checklist>
+              <li data-check="brief"><span></span><div><strong>Brief defined</strong><small>Name + business goal</small></div></li>
+              <li data-check="source"><span></span><div><strong>Source references</strong><small>At least one local file reference</small></div></li>
+              <li data-check="rights"><span></span><div><strong>Rights acknowledged</strong><small>Evidence available for review</small></div></li>
+              <li data-check="deliverables"><span></span><div><strong>Outputs selected</strong><small>At least one requested intent</small></div></li>
+              <li data-check="profile"><span></span><div><strong>Output profile</strong><small>Format + duration selected</small></div></li>
+            </ul>
+            <div class="manifest-actions">
+              <button class="button button-primary button-block" type="button" data-export-manifest disabled>Export request manifest</button>
+              <button class="button button-ghost button-block" type="button" data-reset-draft>Reset draft</button>
+            </div>
+            <div class="submission-gate">
+              <span>Submission gated</span>
+              <p>Backend intake and file transfer remain disabled until separately approved.</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="operations" class="section-shell operations-section" aria-labelledby="operations-title">
+      <div class="section-intro split-intro">
+        <div>
+          <div class="eyebrow">Operations</div>
+          <h2 id="operations-title">See capability state without confusing it for authority.</h2>
+        </div>
+        <p>These signals are intentionally secret-free. A green runtime flag means the component is configured; release authority still comes from the production control plane.</p>
+      </div>
+
+      <div class="ops-grid">
+        <article class="ops-card featured"><span class="ops-label">Service</span><strong data-service-status>Checking</strong><small data-service-caption>Connecting to /v1/ui/bootstrap</small></article>
+        <article class="ops-card"><span class="ops-label">Public API</span><strong data-op-public-api>—</strong><small>External vector-search surface</small></article>
+        <article class="ops-card"><span class="ops-label">MCP</span><strong data-op-mcp>—</strong><small>Agent retrieval interface</small></article>
+        <article class="ops-card"><span class="ops-label">Ingestion</span><strong data-op-ingestion>—</strong><small>Durable Workflow execution</small></article>
+        <article class="ops-card"><span class="ops-label">Provider egress</span><strong data-op-egress>—</strong><small>External model dispatch</small></article>
+        <article class="ops-card"><span class="ops-label">Usage ledger</span><strong data-op-ledger>—</strong><small>Persistent tenant metering</small></article>
+      </div>
+
+      <div class="release-card">
+        <div class="release-card-head">
+          <div><span class="panel-kicker">Capability-scoped rollout</span><h3>Production release rail</h3></div>
+          <span class="status-badge status-badge-neutral">Unactivated</span>
+        </div>
+        <ol class="release-rail" data-release-rail>
+          <li data-stage="S0"><span>S0</span><strong>Control</strong><small>0% traffic</small></li>
+          <li data-stage="S1"><span>S1</span><strong>Operator smoke</strong><small>0% traffic</small></li>
+          <li data-stage="S2"><span>S2</span><strong>Tenant canary</strong><small>≤ 1%</small></li>
+          <li data-stage="S3"><span>S3</span><strong>Limited</strong><small>≤ 5%</small></li>
+          <li data-stage="S4"><span>S4</span><strong>Expanded</strong><small>≤ 25%</small></li>
+          <li data-stage="S5"><span>S5</span><strong>General</strong><small>≤ 100%</small></li>
+        </ol>
+        <p class="release-footnote">S0/S1 controls are implemented but not activated. S2+ remains outside current executable authority.</p>
+      </div>
+    </section>
+
+    <section id="governance" class="section-shell governance-section" aria-labelledby="governance-title">
+      <div class="section-intro">
+        <div class="eyebrow">Governance</div>
+        <h2 id="governance-title">Rights are data. Authority is explicit.</h2>
+        <p>The interface is designed around deny-by-default media operations, not around hiding control state behind convenience UI.</p>
+      </div>
+      <div class="governance-grid">
+        <article><span class="governance-index">01</span><h3>Provenance first</h3><p>Source media, physical evidence, rights revisions, derived segments, and vector lineage stay attributable to their origin.</p></article>
+        <article><span class="governance-index">02</span><h3>Purpose-specific rights</h3><p>API, MCP, advertising, export, licensing, publication, and provider processing are separate grants rather than one broad permission.</p></article>
+        <article><span class="governance-index">03</span><h3>Retrieval is not authorization</h3><p>A high-similarity match can surface evidence. It cannot create publication rights, commercial authority, or provider-promotion authority.</p></article>
+        <article><span class="governance-index">04</span><h3>Human release control</h3><p>Infrastructure readiness and successful tests remain evidence inputs. Named capability activation still requires bounded human approval.</p></article>
+      </div>
+
+      <div class="hard-stop-panel">
+        <div><span class="panel-kicker">Zero-tolerance controls</span><h3>Hard-stop conditions</h3></div>
+        <div class="hard-stop-tags" aria-label="Hard stop conditions">
+          <span>Authentication bypass</span><span>Tenant crossover</span><span>Rights violation</span><span>Unauthorized provider activity</span><span>Ledger corruption</span><span>Route / binding drift</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer section-shell">
+    <div class="brand footer-brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="brand-copy"><strong>TMG</strong><small>Video Intelligence</small></span></div>
+    <p>Internal prototype · G0 · No public commercial authority</p>
+    <p class="footer-meta">Interface treatment only; no new visual brand authority is asserted.</p>
+  </footer>
+
+  <div class="toast" role="status" aria-live="polite" data-toast></div>
+</body>
+</html>
