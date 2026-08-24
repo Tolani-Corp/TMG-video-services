@@ -27,6 +27,8 @@ import {
   type ProductionPlan,
 } from "./production-request";
 
+const MAX_PARALLEL_MARKETING_VIDEO_GENERATIONS = 3;
+
 interface ProductionPackageManifest {
   schemaVersion: "tmg.production-package.v1";
   requestId: string;
@@ -451,20 +453,31 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
 
     const videos: MarketingVideoArtifact[] = [];
     if (wantsMarketingVideos) {
-      for (let index = 0; index < creativeBrief.variants.length; index += 1) {
-        const variant = creativeBrief.variants[index];
-        if (!variant) continue;
-        const artifact = await step.do(
-          `generate marketing preview ${index + 1} ${variant.targetProfile.profileId}`,
-          { retries: { limit: 2, delay: "15 seconds", backoff: "exponential" }, timeout: "30 minutes" },
-          async () => generateMarketingVideoVariant(this.env, {
-            requestId: plan.requestId,
-            tenantId: plan.tenantId,
-            variant,
-            createdAt: event.timestamp.toISOString(),
+      for (
+        let batchStart = 0;
+        batchStart < creativeBrief.variants.length;
+        batchStart += MAX_PARALLEL_MARKETING_VIDEO_GENERATIONS
+      ) {
+        const batch = creativeBrief.variants.slice(
+          batchStart,
+          batchStart + MAX_PARALLEL_MARKETING_VIDEO_GENERATIONS,
+        );
+        const generated = await Promise.all(
+          batch.map((variant, batchOffset) => {
+            const index = batchStart + batchOffset;
+            return step.do(
+              `generate marketing preview ${index + 1} ${variant.targetProfile.profileId}`,
+              { retries: { limit: 2, delay: "15 seconds", backoff: "exponential" }, timeout: "30 minutes" },
+              async () => generateMarketingVideoVariant(this.env, {
+                requestId: plan.requestId,
+                tenantId: plan.tenantId,
+                variant,
+                createdAt: event.timestamp.toISOString(),
+              }),
+            );
           }),
         );
-        videos.push(artifact);
+        videos.push(...generated);
       }
     }
 
