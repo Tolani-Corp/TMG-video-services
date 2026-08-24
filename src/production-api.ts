@@ -1,6 +1,7 @@
 import {
   checklistReferenceSchema,
   checklistTemplate,
+  normalizeChecklistReferenceValue,
   productionInputObjectKey,
   productionRequestCreateSchema,
   uploadCompleteSchema,
@@ -60,7 +61,7 @@ function requestPath(pathname: string):
 
 function errorResponse(error: unknown, requestId: string): Response {
   const message = error instanceof Error ? error.message : "unknown_error";
-  const clientError = /invalid|required|incomplete|not found|does not|mismatch|immutable|conflict|rejected|submit-ready/i.test(message);
+  const clientError = /invalid|required|incomplete|not found|does not|mismatch|immutable|conflict|rejected|submit-ready|distribution|authorization|HTTPS/i.test(message);
   console.error(JSON.stringify({
     level: clientError ? "warn" : "error",
     event: "production_request_api_error",
@@ -103,6 +104,8 @@ function allowedMimeType(kind: ChecklistItemKind, mimeType: string): boolean {
       return textOrDocument;
     case "brand_assets":
       return normalized.startsWith("image/") || textOrDocument || normalized === "application/zip";
+    case "distribution_targets":
+      return false;
   }
 }
 
@@ -345,8 +348,12 @@ export async function handleProductionApi(
       if (!parsed.success) {
         return json({ error: "invalid_request", issues: parsed.error.issues, requestId: traceId }, 400);
       }
+      const requestSnapshot = await loadRequest(env, path.requestId);
+      const item = requestSnapshot.checklist.find((candidate) => candidate.itemId === path.itemId);
+      if (!item) return json({ error: "checklist_item_not_found", requestId: traceId }, 404);
+      const normalizedValue = normalizeChecklistReferenceValue(item.kind, parsed.data.value);
       const coordinator = requireProductionRequests(env).getByName(path.requestId);
-      const snapshot = await coordinator.setReference(path.itemId, parsed.data.value, new Date().toISOString());
+      const snapshot = await coordinator.setReference(path.itemId, normalizedValue, new Date().toISOString());
       return json({ productionRequest: snapshot, requestId: traceId });
     }
     if (path.kind === "upload") {
