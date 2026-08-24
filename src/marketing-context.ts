@@ -1,3 +1,7 @@
+import {
+  planMarketingDiscoveryStrategy,
+  type MarketingDiscoveryStrategy,
+} from "./marketing-execution-planner";
 import type {
   ProductionPlan,
   SourceContextReference,
@@ -37,6 +41,7 @@ export interface MarketingDiscoverySourcePlan {
   sourceUrl: string;
   provider: "firecrawl_v2";
   endpoint: "https://api.firecrawl.dev/v2/crawl";
+  discovery: MarketingDiscoveryStrategy;
   request: FirecrawlMarketingCrawlRequest;
   authorization: {
     authorizedByRequester: true;
@@ -70,24 +75,40 @@ export interface MarketingDiscoveryPlan {
   };
 }
 
-function buildSourcePlan(source: SourceContextReference): MarketingDiscoverySourcePlan {
+function projectGoal(plan: ProductionPlan): string {
+  return (
+    plan.sourceInputs.find((input) => input.kind === "project_brief")?.referenceValue?.trim()
+    || plan.title
+  );
+}
+
+function buildSourcePlan(
+  source: SourceContextReference,
+  goal: string,
+): MarketingDiscoverySourcePlan {
   if (!source.authorization.authorizedByRequester) {
     throw new Error("marketing context source is not authorized by requester");
   }
+
+  const discovery = planMarketingDiscoveryStrategy({ source, goal });
+  const maxDiscoveryDepth = discovery.mode === "direct"
+    ? 0
+    : Math.min(source.crawlScope.maxDiscoveryDepth, 2);
 
   return {
     sourceType: source.type,
     sourceUrl: source.url,
     provider: "firecrawl_v2",
     endpoint: "https://api.firecrawl.dev/v2/crawl",
+    discovery,
     request: {
       url: source.url,
       includePaths: source.crawlScope.includePaths,
       excludePaths: source.crawlScope.excludePaths,
-      maxDiscoveryDepth: source.crawlScope.maxDiscoveryDepth,
+      maxDiscoveryDepth,
       sitemap: "include",
       ignoreQueryParameters: true,
-      limit: source.crawlScope.maxPages,
+      limit: discovery.pageLimit,
       crawlEntireDomain: false,
       allowExternalLinks: false,
       allowSubdomains: source.crawlScope.allowSubdomains,
@@ -120,11 +141,12 @@ export function buildMarketingDiscoveryPlan(plan: ProductionPlan): MarketingDisc
     return null;
   }
 
+  const goal = projectGoal(plan);
   return {
     schemaVersion: "tmg.marketing-discovery-plan.v1",
     requestId: plan.requestId,
     tenantId: plan.tenantId,
-    sources: plan.marketingCampaign.contextSources.map(buildSourcePlan),
+    sources: plan.marketingCampaign.contextSources.map((source) => buildSourcePlan(source, goal)),
     outputs: {
       campaignContextManifest: true,
       brandContext: true,
