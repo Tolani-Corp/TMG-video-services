@@ -104,6 +104,27 @@ jobs:
           console.log("Cloudflare AI Gateway development token is active");
           NODE
 
+      - name: Verify Unified Billing credit balance
+        shell: bash
+        run: |
+          set -euo pipefail
+          credit_json="$(curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai-gateway/billing/credit-balance" \
+            -H "Authorization: Bearer ${CLOUDFLARE_AI_GATEWAY_KEY}")"
+          CREDIT_JSON="${credit_json}" node - <<'NODE'
+          const payload = JSON.parse(process.env.CREDIT_JSON || "null");
+          const balance = Number(payload?.result?.balance);
+          if (payload?.success !== true || !Number.isFinite(balance)) {
+            console.error("::error::Unable to read AI Gateway Unified Billing credit balance");
+            process.exit(4);
+          }
+          console.log(`AI Gateway Unified Billing balance: ${balance}`);
+          if (balance <= 0) {
+            console.error("::error::AI Gateway Unified Billing balance is empty; P-Video cannot execute");
+            process.exit(5);
+          }
+          NODE
+
       - name: Install and validate exact head
         shell: bash
         run: |
