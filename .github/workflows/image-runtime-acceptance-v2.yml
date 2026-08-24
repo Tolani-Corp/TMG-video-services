@@ -1,4 +1,4 @@
-name: TMG Image Runtime Acceptance v2
+name: TMG Image Runtime Acceptance
 
 on:
   workflow_dispatch:
@@ -14,6 +14,7 @@ on:
       - scripts/prepare-image-runtime-acceptance.mjs
       - scripts/verify-image-runtime-acceptance.mjs
       - tests/image-runtime.test.ts
+      - docs/IMAGE_RUNTIME_V1.md
       - wrangler.jsonc
 
 permissions:
@@ -21,7 +22,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: tmg-image-runtime-acceptance-v2-${{ github.ref }}
+  group: tmg-image-runtime-acceptance-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,11 +34,11 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
       ACCEPTANCE_SHA: ${{ github.sha }}
-      TMG_IMAGE_ACCEPT_WORKER: tmg-image-accept-v2-${{ github.run_id }}
-      TMG_IMAGE_ACCEPT_R2_BUCKET: tmg-image-accept-v2-${{ github.run_id }}
-      TMG_IMAGE_ACCEPT_WORKFLOW: tmg-image-workflow-v2-${{ github.run_id }}
-      TMG_IMAGE_ACCEPT_REQUEST_ID: image-accept-v2-${{ github.run_id }}
-      TMG_IMAGE_ACCEPT_INSTANCE_ID: image-instance-v2-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_WORKER: tmg-image-accept-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_R2_BUCKET: tmg-image-accept-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_WORKFLOW: tmg-image-workflow-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_REQUEST_ID: image-accept-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_INSTANCE_ID: image-instance-${{ github.run_id }}
 
     steps:
       - uses: actions/checkout@v4
@@ -143,7 +144,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tmg-image-runtime-acceptance-v2-${{ github.run_id }}
+          name: tmg-image-runtime-acceptance-${{ github.run_id }}
           if-no-files-found: warn
           path: |
             image-acceptance-request.json
