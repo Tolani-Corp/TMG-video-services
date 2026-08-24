@@ -1,4 +1,5 @@
 import { handleIntakeApi } from "./intake-api";
+import { handleIntakeReviewApi } from "./intake-review-api";
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
@@ -15,6 +16,9 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
+
+    const reviewResponse = await handleIntakeReviewApi(request, env, ctx, requestId);
+    if (reviewResponse) return reviewResponse;
 
     if (
       url.pathname === "/v1/console/session" ||
