@@ -4,6 +4,8 @@ const paths = {
   html: "ui/index.html",
   css: "ui/app.css",
   js: "ui/app.js",
+  intakeCss: "ui/intake.css",
+  intakeJs: "ui/intake.js",
   headers: "ui/_headers",
   wrangler: "wrangler.jsonc",
   worker: "src/index.ts",
@@ -17,9 +19,19 @@ function assert(condition, message) {
 }
 
 async function main() {
-  const [html, css, js, headers, wranglerText, worker, bootstrap, publicContextText, releaseAuthorityText] = await Promise.all(
-    Object.values(paths).map((path) => readFile(path, "utf8")),
-  );
+  const [
+    html,
+    css,
+    js,
+    intakeCss,
+    intakeJs,
+    headers,
+    wranglerText,
+    worker,
+    bootstrap,
+    publicContextText,
+    releaseAuthorityText,
+  ] = await Promise.all(Object.values(paths).map((path) => readFile(path, "utf8")));
   const publicContext = JSON.parse(publicContextText);
   const releaseAuthority = JSON.parse(releaseAuthorityText);
   const wrangler = JSON.parse(wranglerText.replace(/^\s*\/\/.*$/gm, ""));
@@ -35,12 +47,28 @@ async function main() {
 
   assert(!/<script[^>]*>\s*[^<]/i.test(html), "Inline executable scripts are not allowed");
   assert(!/<style[\s>]/i.test(html), "Inline style blocks are not allowed");
-  assert(!/https?:\/\//i.test(html), "UI HTML must not load third-party resources");
-  assert(!/https?:\/\//i.test(css), "UI CSS must not load third-party resources");
-  assert(!/https?:\/\//i.test(js), "UI JavaScript must not call third-party resources");
-  assert(!/\.innerHTML\b/.test(js), "UI JavaScript must avoid innerHTML injection sinks");
-  assert(js.includes('const BOOTSTRAP_ENDPOINT = "/v1/ui/bootstrap"'), "UI may fetch only the governed bootstrap endpoint");
-  assert(!/fetch\((?!BOOTSTRAP_ENDPOINT)/.test(js), "Unexpected fetch call detected in UI JavaScript");
+  for (const [label, source] of [["HTML", html], ["CSS", css], ["app JS", js], ["intake CSS", intakeCss], ["intake JS", intakeJs]]) {
+    assert(!/https?:\/\//i.test(source), `${label} must not load or call third-party resources`);
+  }
+  assert(!/\.innerHTML\b/.test(js), "Core UI JavaScript must avoid innerHTML injection sinks");
+  assert(!/\.innerHTML\b/.test(intakeJs), "Authenticated workspace must avoid innerHTML injection sinks");
+  assert(js.includes('const BOOTSTRAP_ENDPOINT = "/v1/ui/bootstrap"'), "UI bootstrap endpoint is missing");
+  assert(js.includes('script.src = "/intake.js"'), "Authenticated workspace must load from a same-origin static asset");
+  assert(!intakeJs.includes("app.tolanimediagroup.com"), "Customer app domain must remain untouched");
+
+  for (const endpoint of [
+    '"/v1/console/session"',
+    '"/v1/intake/requests"',
+    '"/v1/intake/jobs"',
+    '"/v1/intake/rights/review-queue"',
+  ]) {
+    assert(intakeJs.includes(endpoint), `Authenticated workspace endpoint missing: ${endpoint}`);
+  }
+  assert(intakeJs.includes('credentials: "same-origin"'), "Authenticated workspace requests must remain same-origin");
+  assert(intakeJs.includes('"x-tmg-content-sha256": sha256'), "Workspace upload must bind the locally computed SHA-256");
+  assert(intakeJs.includes('crypto.subtle.digest("SHA-256"'), "Workspace must hash source/evidence locally before upload");
+  assert(intakeJs.includes("Source media remains local and has not been uploaded"), "Rights-first stop point must be explicit in the UX");
+  assert(intakeJs.includes("processing-authority-remains-blocked-at-g0"), "Job creation must acknowledge the G0 processing block");
 
   assert(js.includes('schema: "tmg.request-manifest.draft.v1"'), "Request manifest schema is missing");
   assert(js.includes("submissionAuthority: false"), "Local request manifest must deny submission authority");
@@ -63,14 +91,15 @@ async function main() {
   assert(worker.includes('url.pathname === "/v1/ui/bootstrap"'), "Worker UI bootstrap route is missing");
   assert(worker.includes("buildUiBootstrap(env)"), "Worker UI bootstrap projection is missing");
   assert(bootstrap.includes('publicStatusGate: "G0"'), "Bootstrap must preserve G0 status");
-  assert(bootstrap.includes("submissionAuthority: false"), "Bootstrap must deny intake submission authority");
+  assert(bootstrap.includes("submissionAuthority: false"), "Bootstrap must deny public/release submission authority");
+  assert(bootstrap.includes("processingAuthority: false"), "Bootstrap must deny processing authority");
 
   assert(releaseAuthority.status === "s0_s1_implemented_unactivated", "Release authority status changed unexpectedly");
   assert(releaseAuthority.authority.activationAuthorized === false, "UI increment cannot activate production authority");
   assert(releaseAuthority.authority.publicTrafficAuthorized === false, "UI increment cannot authorize public traffic");
   assert(releaseAuthority.authority.commercialUseAuthorized === false, "UI increment cannot authorize commercial use");
 
-  console.log("TMG enterprise UI integrity: PASS");
+  console.log("TMG enterprise UI + authenticated workspace integrity: PASS");
 }
 
 main().catch((error) => {
