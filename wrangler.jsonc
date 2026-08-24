@@ -29,6 +29,7 @@
     "TMG_MARKETING_VIDEO_GENERATION_ENABLED": "false",
     "TMG_MARKETING_VIDEO_PROVIDER_ID": "pruna/p-video",
     "TMG_MARKETING_VIDEO_PROVIDER_ACCEPTANCE_STATE": "unverified",
+    "TMG_IMAGE_RUNTIME_ENABLED": "false",
     "TMG_INGEST_WORKFLOW_ENABLED": "false",
     "TMG_INGESTION_MODE": "fixture_only",
     "TMG_POLICY_VERSION": "2026-08-20.v3",
@@ -40,6 +41,9 @@
   },
   "ai": {
     "binding": "AI"
+  },
+  "images": {
+    "binding": "IMAGES"
   },
   "durable_objects": {
     "bindings": [
@@ -80,6 +84,11 @@
       "name": "tmg-video-production-dev",
       "binding": "PRODUCTION_WORKFLOW",
       "class_name": "ProductionWorkflow"
+    },
+    {
+      "name": "tmg-image-processing-dev",
+      "binding": "IMAGE_WORKFLOW",
+      "class_name": "ImageProcessingWorkflow"
     }
   ],
   "observability": {
