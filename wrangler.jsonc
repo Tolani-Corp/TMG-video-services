@@ -2,11 +2,15 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tmg-video-services",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-20",
+  "compatibility_date": "2026-08-24",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "exports": {
     "TenantUsageLedger": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ProductionRequestCoordinator": {
       "type": "durable-object",
       "storage": "sqlite"
     }
@@ -14,6 +18,7 @@
   "vars": {
     "TMG_PUBLIC_API_ENABLED": "false",
     "TMG_MCP_ENABLED": "false",
+    "TMG_PRODUCTION_REQUEST_API_ENABLED": "false",
     "TMG_INGEST_WORKFLOW_ENABLED": "false",
     "TMG_INGESTION_MODE": "fixture_only",
     "TMG_POLICY_VERSION": "2026-08-20.v3",
@@ -28,6 +33,10 @@
       {
         "name": "TENANT_USAGE_LEDGER",
         "class_name": "TenantUsageLedger"
+      },
+      {
+        "name": "PRODUCTION_REQUESTS",
+        "class_name": "ProductionRequestCoordinator"
       }
     ]
   },
@@ -53,6 +62,11 @@
       "name": "tmg-video-revocation-dev",
       "binding": "REVOKE_WORKFLOW",
       "class_name": "RevocationWorkflow"
+    },
+    {
+      "name": "tmg-video-production-dev",
+      "binding": "PRODUCTION_WORKFLOW",
+      "class_name": "ProductionWorkflow"
     }
   ],
   "observability": {
@@ -66,6 +80,7 @@
       "vars": {
         "TMG_PUBLIC_API_ENABLED": "false",
         "TMG_MCP_ENABLED": "false",
+        "TMG_PRODUCTION_REQUEST_API_ENABLED": "false",
         "TMG_INGEST_WORKFLOW_ENABLED": "false",
         "TMG_INGESTION_MODE": "fixture_only",
         "TMG_POLICY_VERSION": "2026-08-20.v3",
@@ -80,6 +95,10 @@
           {
             "name": "TENANT_USAGE_LEDGER",
             "class_name": "TenantUsageLedger"
+          },
+          {
+            "name": "PRODUCTION_REQUESTS",
+            "class_name": "ProductionRequestCoordinator"
           }
         ]
       },
@@ -105,6 +124,11 @@
           "name": "tmg-video-revocation-prod",
           "binding": "REVOKE_WORKFLOW",
           "class_name": "RevocationWorkflow"
+        },
+        {
+          "name": "tmg-video-production-prod",
+          "binding": "PRODUCTION_WORKFLOW",
+          "class_name": "ProductionWorkflow"
         }
       ],
       "observability": {
