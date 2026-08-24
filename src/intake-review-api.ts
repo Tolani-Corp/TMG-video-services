@@ -17,6 +17,10 @@ function enabled(value: string | undefined): boolean {
   return value === "true";
 }
 
+function provisioned(value: string | undefined): boolean {
+  return String(value || "") === "provisioned";
+}
+
 function safeDownloadName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 180) || "rights-evidence";
 }
@@ -37,7 +41,7 @@ export async function handleIntakeReviewApi(
 
   try {
     const actor = await requireConsoleActor(ctx);
-    if (!enabled(env.TMG_INTAKE_ENABLED) || env.TMG_CONTROL_DB_BINDING_STATE !== "provisioned") {
+    if (!enabled(env.TMG_INTAKE_ENABLED) || !provisioned(env.TMG_CONTROL_DB_BINDING_STATE)) {
       return json({ error: "intake_disabled", requestId }, 503);
     }
 
