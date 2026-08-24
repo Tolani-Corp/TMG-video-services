@@ -34,11 +34,15 @@ function isEnabled(value: string | undefined): boolean {
   return value === "true";
 }
 
+function provisioned(value: string | undefined): boolean {
+  return String(value || "") === "provisioned";
+}
+
 function requireIntakeEnabled(env: Env): void {
   if (!isEnabled(env.TMG_INTAKE_ENABLED)) {
     throw new IntakeForbiddenError("authenticated intake is disabled at the current product gate");
   }
-  if (env.TMG_CONTROL_DB_BINDING_STATE !== "provisioned") {
+  if (!provisioned(env.TMG_CONTROL_DB_BINDING_STATE)) {
     throw new IntakeForbiddenError("authenticated intake control database is not provisioned");
   }
 }
@@ -156,8 +160,8 @@ export async function handleIntakeApi(
         actor,
         publicStatusGate: "G0",
         intake: {
-          enabled: isEnabled(env.TMG_INTAKE_ENABLED) && env.TMG_CONTROL_DB_BINDING_STATE === "provisioned",
-          consoleHost: env.TMG_CONSOLE_HOST,
+          enabled: isEnabled(env.TMG_INTAKE_ENABLED) && provisioned(env.TMG_CONTROL_DB_BINDING_STATE),
+          consoleHost: String(env.TMG_CONSOLE_HOST || "console.tolanimediagroup.com"),
           rightsFirst: true,
           independentRightsReviewRequired: true,
           processingAuthority: false,
