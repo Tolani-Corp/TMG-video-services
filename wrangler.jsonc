@@ -5,6 +5,12 @@
   "compatibility_date": "2026-08-24",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "assets": {
+    "directory": "./ui",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/health", "/v1/*", "/mcp*"]
+  },
   "exports": {
     "TenantUsageLedger": {
       "type": "durable-object",
