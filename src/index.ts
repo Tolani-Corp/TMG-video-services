@@ -1,4 +1,5 @@
 import { handleMcp } from "./mcp";
+import { handleProductionApi } from "./production-api";
 import { vectorSearchBodySchema } from "./schemas";
 import { searchVideoMoments, VectorDimensionError } from "./vectorize";
 
@@ -27,6 +28,7 @@ export default {
         publicStatusGate: "G0",
         publicApiEnabled: isEnabled(env.TMG_PUBLIC_API_ENABLED),
         mcpEnabled: isEnabled(env.TMG_MCP_ENABLED),
+        productionRequestApiEnabled: isEnabled(env.TMG_PRODUCTION_REQUEST_API_ENABLED),
         policyVersion: env.TMG_POLICY_VERSION,
         requestId,
       });
@@ -44,6 +46,20 @@ export default {
         );
       }
       return handleMcp(request, env, ctx);
+    }
+
+    if (url.pathname.startsWith("/v1/production/")) {
+      if (!isEnabled(env.TMG_PRODUCTION_REQUEST_API_ENABLED)) {
+        return json(
+          {
+            error: "production_request_api_disabled",
+            message: "Checklist production intake is implemented but remains disabled while TMG is at G0.",
+            requestId,
+          },
+          503,
+        );
+      }
+      return handleProductionApi(request, env, requestId);
     }
 
     if (request.method === "POST" && url.pathname === "/v1/search/vector") {
@@ -100,5 +116,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export { IngestionWorkflow } from "./workflow";
+export { ProductionWorkflow } from "./production-workflow";
 export { RevocationWorkflow } from "./revocation-workflow";
+export { ProductionRequestCoordinator } from "./production-request-coordinator";
 export { TenantUsageLedger } from "./tenant-usage-ledger";
