@@ -27,8 +27,19 @@
     "TMG_EMBEDDING_PROVIDER_ID": "fixture",
     "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
     "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified",
-    "TMG_TENANT_USAGE_LEDGER_ENABLED": "false"
+    "TMG_TENANT_USAGE_LEDGER_ENABLED": "false",
+    "TMG_INTAKE_ENABLED": "false",
+    "TMG_CONTROL_DB_BINDING_STATE": "unprovisioned",
+    "TMG_CONSOLE_HOST": "console.tolanimediagroup.com"
   },
+  "d1_databases": [
+    {
+      "binding": "CONTROL_DB",
+      "database_name": "tmg-video-control-dev",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -79,8 +90,19 @@
         "TMG_EMBEDDING_PROVIDER_ID": "fixture",
         "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
         "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified",
-        "TMG_TENANT_USAGE_LEDGER_ENABLED": "false"
+        "TMG_TENANT_USAGE_LEDGER_ENABLED": "false",
+        "TMG_INTAKE_ENABLED": "false",
+        "TMG_CONTROL_DB_BINDING_STATE": "unprovisioned",
+        "TMG_CONSOLE_HOST": "console.tolanimediagroup.com"
       },
+      "d1_databases": [
+        {
+          "binding": "CONTROL_DB",
+          "database_name": "tmg-video-control-prod",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
       "durable_objects": {
         "bindings": [
           {
