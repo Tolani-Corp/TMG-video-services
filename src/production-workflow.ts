@@ -467,7 +467,7 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
             const index = batchStart + batchOffset;
             return step.do(
               `generate marketing preview ${index + 1} ${variant.targetProfile.profileId}`,
-              { retries: { limit: 2, delay: "15 seconds", backoff: "exponential" }, timeout: "30 minutes" },
+              { retries: { limit: 1, delay: "15 seconds", backoff: "exponential" }, timeout: "10 minutes" },
               async () => generateMarketingVideoVariant(this.env, {
                 requestId: plan.requestId,
                 tenantId: plan.tenantId,
