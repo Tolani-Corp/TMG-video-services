@@ -65,13 +65,17 @@ function enabled(value: string | undefined): boolean {
   return value === "true";
 }
 
+function provisioned(value: string | undefined): boolean {
+  return String(value || "") === "provisioned";
+}
+
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function buildUiBootstrap(env: Env): TmgUiBootstrap {
-  const intakeEnabled = enabled(env.TMG_INTAKE_ENABLED) && env.TMG_CONTROL_DB_BINDING_STATE === "provisioned";
+  const intakeEnabled = enabled(env.TMG_INTAKE_ENABLED) && provisioned(env.TMG_CONTROL_DB_BINDING_STATE);
   return {
     schema: "tmg.ui-bootstrap.v1",
     service: "tmg-video-services",
@@ -117,9 +121,9 @@ export function buildUiBootstrap(env: Env): TmgUiBootstrap {
       localDraftEnabled: true,
       manifestExportEnabled: true,
       authenticatedIntakeEnabled: intakeEnabled,
-      controlDbBindingState: env.TMG_CONTROL_DB_BINDING_STATE || "unprovisioned",
+      controlDbBindingState: String(env.TMG_CONTROL_DB_BINDING_STATE || "unprovisioned"),
       authentication: "cloudflare-access",
-      consoleHost: env.TMG_CONSOLE_HOST || "console.tolanimediagroup.com",
+      consoleHost: String(env.TMG_CONSOLE_HOST || "console.tolanimediagroup.com"),
       rightsFirst: true,
       independentRightsReviewRequired: true,
       backendSubmissionEnabled: intakeEnabled,
