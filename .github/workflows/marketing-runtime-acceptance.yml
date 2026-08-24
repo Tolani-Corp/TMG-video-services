@@ -165,6 +165,20 @@ jobs:
           TMG_MARKETING_ACCEPT_BASE_URL: ${{ steps.deploy.outputs.worker_url }}
         run: node scripts/run-marketing-runtime-acceptance.mjs
 
+      - name: Retrieve pre-render diagnostics after failed execution
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -f marketing-acceptance-request.json ]; then exit 0; fi
+          REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).requestId || ""')"
+          if [ -z "${REQUEST_ID}" ]; then exit 0; fi
+          ROOT="tenants/marketing_acceptance/production-requests/${REQUEST_ID}"
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/campaign-context-v1.json" --file marketing-campaign-context.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/creative-brief-v1.json" --file marketing-creative-brief.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/social-copy-v1.json" --file marketing-social-copy.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/outputs/production-package-v1.json" --file marketing-production-package.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+
       - name: Retrieve immutable marketing artifacts
         shell: bash
         run: |
@@ -208,6 +222,8 @@ jobs:
             marketing-review-package.json
             marketing-campaign-context.json
             marketing-creative-brief.json
+            marketing-social-copy.json
+            marketing-production-package.json
             marketing-workflow.txt
 
       - name: Remove isolated Worker
