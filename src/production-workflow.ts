@@ -159,8 +159,64 @@ function marketingVideoRuntimeReady(env: Env): boolean {
   );
 }
 
+function compactWorkflowFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1000) || "unknown_workflow_failure";
+}
+
+function payloadRequestId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const requestId = (value as { requestId?: unknown }).requestId;
+  return typeof requestId === "string" && requestId.trim() ? requestId.trim() : undefined;
+}
+
 export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> {
   async run(
+    event: WorkflowEvent<ProductionPlan>,
+    step: WorkflowStep,
+  ): Promise<ProductionWorkflowResult> {
+    try {
+      return await this.execute(event, step);
+    } catch (error) {
+      const requestId = payloadRequestId(event.payload);
+      const reason = compactWorkflowFailure(error);
+      console.error(JSON.stringify({
+        level: "error",
+        event: "production_workflow_failed",
+        workflowInstanceId: event.instanceId,
+        requestId: requestId ?? null,
+        reason,
+      }));
+      if (requestId) {
+        try {
+          await step.do(
+            "record terminal production workflow failure",
+            { retries: { limit: 3, delay: "2 seconds", backoff: "exponential" }, timeout: "1 minute" },
+            async () => {
+              const coordinator = requireProductionRequests(this.env).getByName(requestId);
+              await coordinator.markFailed(event.instanceId, reason, new Date().toISOString());
+            },
+          );
+        } catch (failureRecordError) {
+          console.error(JSON.stringify({
+            level: "error",
+            event: "production_workflow_failure_record_failed",
+            workflowInstanceId: event.instanceId,
+            requestId,
+            reason: compactWorkflowFailure(failureRecordError),
+          }));
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async execute(
     event: WorkflowEvent<ProductionPlan>,
     step: WorkflowStep,
   ): Promise<ProductionWorkflowResult> {
@@ -284,13 +340,13 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
       const source = marketingDiscoveryPlan.sources[sourceIndex];
       if (!source) throw new Error("marketing discovery source is missing");
       const started = await step.do(
-        `start marketing crawl ${sourceIndex + 1}`,
-        { retries: { limit: 1, delay: "1 second", backoff: "constant" }, timeout: "2 minutes" },
+        `start dynamic marketing discovery ${sourceIndex + 1}`,
+        { retries: { limit: 1, delay: "2 seconds", backoff: "constant" }, timeout: "3 minutes" },
         async () => startMarketingCrawl(runtimeEnv, source),
       );
 
       let completedKey: string | undefined;
-      for (let poll = 0; poll < 120; poll += 1) {
+      for (let poll = 0; poll < 90; poll += 1) {
         const snapshotState = await step.do(
           `poll marketing crawl ${sourceIndex + 1} attempt ${poll + 1}`,
           { retries: { limit: 3, delay: "5 seconds", backoff: "exponential" }, timeout: "2 minutes" },
@@ -306,7 +362,10 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
                 sourceIndex,
                 started.jobId,
               );
-              await putImmutableJson(this.env.MEDIA_BUCKET, key, snapshot);
+              await putImmutableJson(this.env.MEDIA_BUCKET, key, {
+                ...snapshot,
+                executionDiscovery: started.discovery,
+              });
               return {
                 status: snapshot.status,
                 key,
@@ -347,7 +406,7 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
     });
 
     const briefKey = creativeBriefKey(plan.tenantId, plan.requestId);
-    const creativeBrief = await step.do("compile target-aware marketing creative brief", async () => {
+    const creativeBrief = await step.do("compile adaptive target-aware marketing creative brief", async () => {
       const brief = compileMarketingCreativeBrief({
         plan,
         context: context as CampaignContextManifest,
@@ -369,6 +428,11 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
     const wantsMarketingVideos = plan.deliverables.some(
       (deliverable) => deliverable.type === "branded_marketing_videos",
     );
+    if (wantsMarketingVideos && !creativeBrief.contextQuality.generationEligible) {
+      throw new Error(
+        `marketing_context_quality_insufficient:${creativeBrief.contextQuality.score}:${creativeBrief.contextQuality.warnings.join(",")}`,
+      );
+    }
     if (wantsMarketingVideos && !marketingVideoRuntimeReady(this.env)) {
       await step.do("hold marketing video generation pending provider authority", async () => {
         await hold(this.env, event, "marketing_video_provider_pending");
@@ -391,8 +455,8 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
         const variant = creativeBrief.variants[index];
         if (!variant) continue;
         const artifact = await step.do(
-          `generate branded marketing video ${index + 1}`,
-          { retries: { limit: 1, delay: "1 second", backoff: "constant" }, timeout: "30 minutes" },
+          `generate marketing preview ${index + 1} ${variant.targetProfile.profileId}`,
+          { retries: { limit: 2, delay: "15 seconds", backoff: "exponential" }, timeout: "30 minutes" },
           async () => generateMarketingVideoVariant(this.env, {
             requestId: plan.requestId,
             tenantId: plan.tenantId,
