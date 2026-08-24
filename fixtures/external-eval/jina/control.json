@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureId": "tmg_jina_external_eval_fixture_001",
+  "assetId": "tmg_jina_eval_fixture_001",
+  "tenantId": "tmg_fixture",
+  "purpose": "z4-jina-multimodal-evaluation-only",
+  "media": {
+    "path": "fixtures/external-eval/jina/tmg-jina-eval-fixture.mp4",
+    "sha256": "7ae5c8bd4b60be57319227269880cbaa7807dd3221d6930b2e6aa149e229549f",
+    "bytes": 4404,
+    "mimeType": "video/mp4",
+    "durationMs": 1000,
+    "description": "Repo-owned synthetic FFmpeg testsrc video. It contains no user, creator, licensed, adult, biometric, private, or production media."
+  },
+  "rights": {
+    "evidenceState": "verified",
+    "sourceClass": "synthetic-repo-owned-fixture",
+    "owner": "Tolani Corp",
+    "internalUse": true,
+    "derivativeUse": true,
+    "externalProviderEvaluation": true,
+    "allowedExternalProviders": [
+      "jina-eval"
+    ],
+    "allowedPurposes": [
+      "embedding-evaluation",
+      "cross-modal-retrieval-evaluation",
+      "provider-tournament"
+    ],
+    "grants": {
+      "externalApi": true,
+      "mcp": false,
+      "advertising": false,
+      "datasetExport": false,
+      "licensing": false,
+      "publication": false,
+      "commercialUse": false,
+      "productionUse": false
+    }
+  },
+  "processing": {
+    "environment": "evaluation-preview-only",
+    "persistenceClassification": "none",
+    "rawVectorPersistence": false,
+    "providerTrainingAuthorized": false,
+    "providerPromotionAuthority": false,
+    "productionAuthority": false,
+    "revocationRequiredOnRightsChange": true
+  }
+}
