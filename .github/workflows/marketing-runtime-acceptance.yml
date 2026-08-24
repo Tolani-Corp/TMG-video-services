@@ -16,8 +16,10 @@ on:
       - src/firecrawl-marketing-runtime.ts
       - src/marketing-context.ts
       - src/marketing-creative.ts
+      - src/marketing-execution-planner.ts
       - src/marketing-video-runtime.ts
       - src/production-api.ts
+      - src/production-request-coordinator.ts
       - src/production-request.ts
       - src/production-workflow.ts
       - src/index.ts
@@ -25,6 +27,8 @@ on:
       - scripts/render-marketing-runtime-acceptance-config.mjs
       - scripts/run-marketing-runtime-acceptance.mjs
       - scripts/verify-marketing-runtime-acceptance.mjs
+      - tests/marketing-execution-planner.test.ts
+      - tests/marketing-runtime.test.ts
       - tests/production-intake-marketing.test.ts
       - wrangler.jsonc
 
@@ -34,7 +38,7 @@ permissions:
 
 concurrency:
   group: tmg-marketing-runtime-acceptance-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   acceptance:
