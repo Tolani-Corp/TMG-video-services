@@ -39,9 +39,18 @@ export type TmgUiBootstrap = {
   requestIntake: {
     localDraftEnabled: true;
     manifestExportEnabled: true;
-    backendSubmissionEnabled: false;
-    fileTransferEnabled: false;
+    authenticatedIntakeEnabled: boolean;
+    controlDbBindingState: string;
+    authentication: "cloudflare-access";
+    consoleHost: string;
+    rightsFirst: true;
+    independentRightsReviewRequired: true;
+    backendSubmissionEnabled: boolean;
+    fileTransferEnabled: boolean;
     submissionAuthority: false;
+    processingAuthority: false;
+    publicationAuthority: false;
+    commercialAuthority: false;
   };
   authorityBoundary: {
     semanticSimilarityGrantsAuthority: false;
@@ -62,6 +71,7 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 }
 
 export function buildUiBootstrap(env: Env): TmgUiBootstrap {
+  const intakeEnabled = enabled(env.TMG_INTAKE_ENABLED) && env.TMG_CONTROL_DB_BINDING_STATE === "provisioned";
   return {
     schema: "tmg.ui-bootstrap.v1",
     service: "tmg-video-services",
@@ -106,9 +116,18 @@ export function buildUiBootstrap(env: Env): TmgUiBootstrap {
     requestIntake: {
       localDraftEnabled: true,
       manifestExportEnabled: true,
-      backendSubmissionEnabled: false,
-      fileTransferEnabled: false,
+      authenticatedIntakeEnabled: intakeEnabled,
+      controlDbBindingState: env.TMG_CONTROL_DB_BINDING_STATE || "unprovisioned",
+      authentication: "cloudflare-access",
+      consoleHost: env.TMG_CONSOLE_HOST || "console.tolanimediagroup.com",
+      rightsFirst: true,
+      independentRightsReviewRequired: true,
+      backendSubmissionEnabled: intakeEnabled,
+      fileTransferEnabled: intakeEnabled,
       submissionAuthority: false,
+      processingAuthority: false,
+      publicationAuthority: false,
+      commercialAuthority: false,
     },
     authorityBoundary: {
       semanticSimilarityGrantsAuthority: false,
