@@ -133,7 +133,7 @@ afterEach(() => {
 });
 
 describe("TMG Marketing Runtime v1", () => {
-  it("maps, ranks, and executes a bounded governed Firecrawl crawl", async () => {
+  it("maps, ranks, and executes a bounded governed Firecrawl crawl in declared best-effort mode", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({
         success: true,
@@ -173,6 +173,7 @@ describe("TMG Marketing Runtime v1", () => {
 
     const env = {
       TMG_MARKETING_DISCOVERY_ENABLED: "true",
+      TMG_FIRECRAWL_ZERO_DATA_RETENTION_MODE: "best_effort",
       FIRECRAWL_API_KEY: "test-key",
     };
     const source = discoveryPlan().sources[0];
@@ -187,6 +188,9 @@ describe("TMG Marketing Runtime v1", () => {
     expect(started.discovery.selectedUrls).toContain("https://acme.example/pricing");
     expect(started.discovery.selectedUrls).not.toContain("https://acme.example/privacy");
     expect(started.discovery.selectedUrls.some((url) => url.includes("outside.example"))).toBe(false);
+    expect(started.discovery.zeroDataRetentionMode).toBe("best_effort");
+    expect(started.discovery.zeroDataRetentionApplied).toBe(true);
+    expect(started.discovery.zeroDataRetentionDowngradeUsed).toBe(false);
     expect(snapshot.status).toBe("completed");
     expect(snapshot.pages[0]?.branding?.logo).toBe("https://acme.example/logo.svg");
     expect(snapshot.pages[0]?.images).toEqual(["https://acme.example/product.webp"]);
@@ -196,9 +200,60 @@ describe("TMG Marketing Runtime v1", () => {
     const crawlBody = String(fetchMock.mock.calls[1]?.[1]?.body);
     expect(crawlBody).toContain('"branding"');
     expect(crawlBody).toContain('"ignoreRobotsTxt":false');
+    expect(crawlBody).toContain('"zeroDataRetention":true');
     expect(crawlBody).toContain("features");
     expect(crawlBody).toContain("pricing");
     expect(crawlBody).not.toContain("privacy");
+  });
+
+  it("fails closed by default and avoids Map when strict ZDR is required", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        success: false,
+        error: "Zero Data Retention (ZDR) is not enabled for your team.",
+      }),
+      { status: 403, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const source = discoveryPlan().sources[0];
+    if (!source) throw new Error("source missing");
+    await expect(startMarketingCrawl({
+      TMG_MARKETING_DISCOVERY_ENABLED: "true",
+      FIRECRAWL_API_KEY: "test-key",
+    }, source)).rejects.toThrow(/Zero Data Retention/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v2/crawl");
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain('"zeroDataRetention":true');
+  });
+
+  it("allows only an explicit best-effort ZDR downgrade and records it", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ success: true, links: [{ url: "https://acme.example/" }] }))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({
+          success: false,
+          error: "Zero Data Retention (ZDR) is not enabled for your team. Contact support@firecrawl.com to enable this feature.",
+        }),
+        { status: 403, headers: { "content-type": "application/json" } },
+      ))
+      .mockResolvedValueOnce(Response.json({ success: true, id: "crawl-standard-retention" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const source = discoveryPlan().sources[0];
+    if (!source) throw new Error("source missing");
+    const started = await startMarketingCrawl({
+      TMG_MARKETING_DISCOVERY_ENABLED: "true",
+      TMG_FIRECRAWL_ZERO_DATA_RETENTION_MODE: "best_effort",
+      FIRECRAWL_API_KEY: "test-key",
+    }, source);
+
+    expect(started.jobId).toBe("crawl-standard-retention");
+    expect(started.discovery.zeroDataRetentionApplied).toBe(false);
+    expect(started.discovery.zeroDataRetentionDowngradeUsed).toBe(true);
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"zeroDataRetention":true');
+    expect(String(fetchMock.mock.calls[2]?.[1]?.body)).not.toContain("zeroDataRetention");
   });
 
   it("compiles context into differentiated preview plans and reviewable social copy", () => {
