@@ -13,9 +13,12 @@ const MAX_MARKDOWN_CHARS = 16_000;
 const MAX_LINKS_PER_PAGE = 100;
 const MAX_IMAGES_PER_PAGE = 100;
 
+type FirecrawlZdrMode = "required" | "best_effort";
+
 export interface FirecrawlMarketingRuntimeEnv {
   FIRECRAWL_API_KEY?: string;
   TMG_MARKETING_DISCOVERY_ENABLED?: string;
+  TMG_FIRECRAWL_ZERO_DATA_RETENTION_MODE?: string;
 }
 
 export interface FirecrawlMarketingPage {
@@ -48,6 +51,10 @@ export interface FirecrawlMarketingStartResult {
     selectedUrlCount: number;
     selectedUrls: string[];
     fallbackUsed: boolean;
+    zeroDataRetentionMode: FirecrawlZdrMode;
+    zeroDataRetentionRequested: true;
+    zeroDataRetentionApplied: boolean;
+    zeroDataRetentionDowngradeUsed: boolean;
   };
 }
 
@@ -70,6 +77,18 @@ interface FirecrawlMapResponse {
   links?: unknown[];
 }
 
+class FirecrawlProviderError extends Error {
+  readonly status: number;
+  readonly body: string;
+
+  constructor(operation: string, status: number, body: string) {
+    super(`Firecrawl ${operation} failed (${status}): ${body}`);
+    this.name = "FirecrawlProviderError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 function requireRuntime(env: FirecrawlMarketingRuntimeEnv): string {
   if (env.TMG_MARKETING_DISCOVERY_ENABLED !== "true") {
     throw new Error("marketing discovery runtime is disabled");
@@ -77,6 +96,12 @@ function requireRuntime(env: FirecrawlMarketingRuntimeEnv): string {
   const key = env.FIRECRAWL_API_KEY?.trim();
   if (!key) throw new Error("FIRECRAWL_API_KEY is not configured");
   return key;
+}
+
+function zdrMode(env: FirecrawlMarketingRuntimeEnv): FirecrawlZdrMode {
+  return env.TMG_FIRECRAWL_ZERO_DATA_RETENTION_MODE === "best_effort"
+    ? "best_effort"
+    : "required";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -154,10 +179,16 @@ function compactProviderError(error: unknown): string {
   return message.replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]").slice(0, 800);
 }
 
+function isZdrUnavailable(error: unknown): boolean {
+  if (!(error instanceof FirecrawlProviderError) || error.status !== 403) return false;
+  return /zero data retention|\bzdr\b/i.test(error.body)
+    && /not enabled|enterprise|contact support/i.test(error.body);
+}
+
 async function providerJson<T>(response: Response, operation: string): Promise<T> {
   if (!response.ok) {
     const body = (await response.text()).slice(0, 2_000);
-    throw new Error(`Firecrawl ${operation} failed (${response.status}): ${body}`);
+    throw new FirecrawlProviderError(operation, response.status, body);
   }
   return response.json<T>();
 }
@@ -203,11 +234,52 @@ export async function mapMarketingSource(
     .slice(0, source.discovery.mapLimit);
 }
 
+async function startCrawlWithDataHandling(
+  env: FirecrawlMarketingRuntimeEnv,
+  apiKey: string,
+  request: MarketingDiscoverySourcePlan["request"],
+): Promise<{
+  parsed: FirecrawlStartResponse;
+  zeroDataRetentionApplied: boolean;
+  zeroDataRetentionDowngradeUsed: boolean;
+}> {
+  const mode = zdrMode(env);
+  try {
+    const parsed = await firecrawlPost<FirecrawlStartResponse>(apiKey, "/crawl", request, "crawl start");
+    return {
+      parsed,
+      zeroDataRetentionApplied: true,
+      zeroDataRetentionDowngradeUsed: false,
+    };
+  } catch (error) {
+    if (mode !== "best_effort" || !isZdrUnavailable(error)) throw error;
+    const { zeroDataRetention: _unsupportedZdr, ...standardRetentionRequest } = request;
+    console.warn(JSON.stringify({
+      level: "warn",
+      event: "firecrawl_zdr_downgrade",
+      reason: "provider_team_zdr_unavailable",
+      sourceUrl: request.url,
+    }));
+    const parsed = await firecrawlPost<FirecrawlStartResponse>(
+      apiKey,
+      "/crawl",
+      standardRetentionRequest,
+      "crawl start after explicit best-effort ZDR downgrade",
+    );
+    return {
+      parsed,
+      zeroDataRetentionApplied: false,
+      zeroDataRetentionDowngradeUsed: true,
+    };
+  }
+}
+
 export async function startMarketingCrawl(
   env: FirecrawlMarketingRuntimeEnv,
   source: MarketingDiscoverySourcePlan,
 ): Promise<FirecrawlMarketingStartResult> {
   const apiKey = requireRuntime(env);
+  const dataHandlingMode = zdrMode(env);
   if (source.authorization.authenticatedCrawlAuthorized) {
     throw new Error("authenticated crawl credential resolver is not implemented");
   }
@@ -225,65 +297,71 @@ export async function startMarketingCrawl(
       maxDiscoveryDepth: 0,
     };
   } else if (source.discovery.mode === "map_rank_crawl" && request.includePaths.length === 0) {
-    try {
-      const mapped = await mapMarketingSource(env, source);
-      mappedLinkCount = mapped.length;
-      const selected = selectMarketingMapLinks({
-        sourceUrl: source.sourceUrl,
-        allowSubdomains: request.allowSubdomains,
-        goal: source.discovery.goal,
-        pageLimit: source.discovery.pageLimit,
-        links: mapped,
-      });
-      selectedUrls = selected.map((link) => link.url);
-      const includePaths = exactIncludePathPatterns(selectedUrls, source.sourceUrl);
-      if (includePaths.length > 0) {
-        request = {
-          ...request,
-          includePaths,
-          limit: Math.min(request.limit, includePaths.length),
-          maxDiscoveryDepth: Math.min(request.maxDiscoveryDepth, 1),
-        };
-      } else {
-        fallbackUsed = true;
-        effectiveMode = "bounded_crawl";
-      }
-    } catch (error) {
+    if (dataHandlingMode === "required") {
+      // The Map API does not expose a documented per-request ZDR control. Under a
+      // strict ZDR policy, do not send source URLs through Map; use the bounded
+      // Crawl request whose ZDR flag is enforceable instead.
       fallbackUsed = true;
       effectiveMode = "bounded_crawl";
-      console.warn(JSON.stringify({
-        level: "warn",
-        event: "marketing_map_rank_fallback",
-        sourceUrl: source.sourceUrl,
-        error: compactProviderError(error),
-      }));
+    } else {
+      try {
+        const mapped = await mapMarketingSource(env, source);
+        mappedLinkCount = mapped.length;
+        const selected = selectMarketingMapLinks({
+          sourceUrl: source.sourceUrl,
+          allowSubdomains: request.allowSubdomains,
+          goal: source.discovery.goal,
+          pageLimit: source.discovery.pageLimit,
+          links: mapped,
+        });
+        selectedUrls = selected.map((link) => link.url);
+        const includePaths = exactIncludePathPatterns(selectedUrls, source.sourceUrl);
+        if (includePaths.length > 0) {
+          request = {
+            ...request,
+            includePaths,
+            limit: Math.min(request.limit, includePaths.length),
+            maxDiscoveryDepth: Math.min(request.maxDiscoveryDepth, 1),
+          };
+        } else {
+          fallbackUsed = true;
+          effectiveMode = "bounded_crawl";
+        }
+      } catch (error) {
+        fallbackUsed = true;
+        effectiveMode = "bounded_crawl";
+        console.warn(JSON.stringify({
+          level: "warn",
+          event: "marketing_map_rank_fallback",
+          sourceUrl: source.sourceUrl,
+          error: compactProviderError(error),
+        }));
+      }
     }
   }
 
-  const parsed = await firecrawlPost<FirecrawlStartResponse>(
-    apiKey,
-    "/crawl",
-    request,
-    "crawl start",
-  );
-  if (parsed.success !== true || !parsed.id) {
+  const started = await startCrawlWithDataHandling(env, apiKey, request);
+  if (started.parsed.success !== true || !started.parsed.id) {
     throw new Error("Firecrawl crawl start did not return a job id");
   }
 
   console.log(JSON.stringify({
     level: "info",
     event: "marketing_discovery_started",
-    jobId: parsed.id,
+    jobId: started.parsed.id,
     sourceUrl: source.sourceUrl,
     requestedMode: source.discovery.mode,
     effectiveMode,
     mappedLinkCount,
     selectedUrlCount: selectedUrls.length,
     fallbackUsed,
+    zeroDataRetentionMode: dataHandlingMode,
+    zeroDataRetentionApplied: started.zeroDataRetentionApplied,
+    zeroDataRetentionDowngradeUsed: started.zeroDataRetentionDowngradeUsed,
   }));
 
   return {
-    jobId: parsed.id,
+    jobId: started.parsed.id,
     discovery: {
       requestedMode: source.discovery.mode,
       effectiveMode,
@@ -291,6 +369,10 @@ export async function startMarketingCrawl(
       selectedUrlCount: selectedUrls.length,
       selectedUrls,
       fallbackUsed,
+      zeroDataRetentionMode: dataHandlingMode,
+      zeroDataRetentionRequested: true,
+      zeroDataRetentionApplied: started.zeroDataRetentionApplied,
+      zeroDataRetentionDowngradeUsed: started.zeroDataRetentionDowngradeUsed,
     },
   };
 }
