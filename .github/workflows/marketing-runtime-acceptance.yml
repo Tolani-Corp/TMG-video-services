@@ -143,8 +143,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail-with-body --silent --show-error "${{ steps.deploy.outputs.worker_url }}/__acceptance/marketing-fixture" > marketing-fixture.html
-          grep -q "TMG Launchpad" marketing-fixture.html
+          ready=false
+          for attempt in $(seq 1 30); do
+            status="$(curl --silent --show-error --output marketing-fixture.html --write-out '%{http_code}' \
+              "${{ steps.deploy.outputs.worker_url }}/__acceptance/marketing-fixture" || true)"
+            if [ "${status}" = "200" ] && grep -q "TMG Launchpad" marketing-fixture.html; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "${ready}" = true || {
+            echo "::error::Synthetic marketing fixture did not become ready after deployment"
+            cat marketing-fixture.html || true
+            exit 4
+          }
 
       - name: Execute authorized website to review-package canary
         shell: bash
