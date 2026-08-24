@@ -30,6 +30,8 @@ jobs:
         run: pnpm typecheck
       - name: Unit tests
         run: pnpm test
+      - name: Authenticated intake local E2E
+        run: pnpm intake:local-e2e
       - name: Tolani commercial-context integrity
         run: pnpm marketing:check
       - name: Publish required Quality status
