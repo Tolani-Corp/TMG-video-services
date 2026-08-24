@@ -3,7 +3,9 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from "cloudflare:workers";
+import { buildMarketingDiscoveryPlan } from "./marketing-context";
 import {
+  marketingDiscoveryPlanObjectKey,
   productionPackageObjectKey,
   productionPlanObjectKey,
   type ProductionPlan,
@@ -15,9 +17,12 @@ interface ProductionPackageManifest {
   tenantId: string;
   status: "planned";
   productionPlanKey: string;
+  marketingDiscoveryPlanKey?: string;
+  distributionTargets: ProductionPlan["distributionTargets"];
   deliverables: Array<{
     type: string;
     skill: string;
+    targets: ProductionPlan["distributionTargets"];
     status: "pending_skill_activation";
     artifacts: [];
   }>;
@@ -31,7 +36,10 @@ interface ProductionWorkflowResult {
   requestId: string;
   planKey: string;
   packageKey: string;
-  holdReason: "production_skill_adapters_pending";
+  marketingDiscoveryPlanKey?: string;
+  holdReason:
+    | "production_skill_adapters_pending"
+    | "marketing_discovery_adapter_pending";
 }
 
 function assertProductionPlan(value: unknown): asserts value is ProductionPlan {
@@ -40,10 +48,16 @@ function assertProductionPlan(value: unknown): asserts value is ProductionPlan {
   if (candidate.schemaVersion !== "tmg.production-plan.v1") throw new Error("unsupported production plan version");
   if (!candidate.requestId || !candidate.tenantId || !candidate.title) throw new Error("production plan identity is incomplete");
   if (!Array.isArray(candidate.sourceInputs) || candidate.sourceInputs.length === 0) throw new Error("production plan source inputs are required");
+  if (!Array.isArray(candidate.distributionTargets) || candidate.distributionTargets.length === 0) {
+    throw new Error("production plan distribution targets are required");
+  }
   if (!Array.isArray(candidate.deliverables) || candidate.deliverables.length === 0) throw new Error("production plan deliverables are required");
   if (candidate.governance?.publicationAuthority !== false) throw new Error("production workflow cannot receive publication authority");
   if (candidate.governance?.externalDistributionAuthority !== false) throw new Error("production workflow cannot receive external distribution authority");
   if (candidate.governance?.rightsEvidenceRequired !== true) throw new Error("production plan must require rights evidence");
+  if (candidate.governance?.discoveredAssetReuseRequiresRightsEvidence !== true) {
+    throw new Error("production plan must require rights evidence for discovered asset reuse");
+  }
 }
 
 async function putImmutableJson(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
@@ -88,6 +102,24 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
       await coordinator.markProcessing(event.instanceId, event.timestamp.toISOString());
     });
 
+    const marketingDiscoveryPlan = await step.do(
+      "compile governed marketing discovery plan",
+      async () => buildMarketingDiscoveryPlan(plan),
+    );
+    const marketingDiscoveryPlanKey = marketingDiscoveryPlan
+      ? marketingDiscoveryPlanObjectKey(plan.tenantId, plan.requestId)
+      : undefined;
+
+    if (marketingDiscoveryPlan && marketingDiscoveryPlanKey) {
+      await step.do("persist governed marketing discovery plan", async () => {
+        await putImmutableJson(
+          this.env.MEDIA_BUCKET,
+          marketingDiscoveryPlanKey,
+          marketingDiscoveryPlan,
+        );
+      });
+    }
+
     const productionPackage: ProductionPackageManifest = await step.do(
       "compile production package manifest",
       async () => ({
@@ -96,9 +128,12 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
         tenantId: plan.tenantId,
         status: "planned",
         productionPlanKey: planKey,
+        ...(marketingDiscoveryPlanKey ? { marketingDiscoveryPlanKey } : {}),
+        distributionTargets: plan.distributionTargets,
         deliverables: plan.deliverables.map((deliverable) => ({
           type: deliverable.type,
           skill: deliverable.skill,
+          targets: deliverable.targets,
           status: "pending_skill_activation" as const,
           artifacts: [] as [],
         })),
@@ -112,11 +147,15 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
       await putImmutableJson(this.env.MEDIA_BUCKET, packageKey, productionPackage);
     });
 
-    await step.do("hold until governed production skills are active", async () => {
+    const holdReason = marketingDiscoveryPlan
+      ? "marketing_discovery_adapter_pending" as const
+      : "production_skill_adapters_pending" as const;
+
+    await step.do("hold until governed adapters are active", async () => {
       const coordinator = requireProductionRequests(this.env).getByName(plan.requestId);
       await coordinator.recordWorkflowHold(
         event.instanceId,
-        "production_skill_adapters_pending",
+        holdReason,
         new Date().toISOString(),
       );
     });
@@ -126,7 +165,8 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
       requestId: plan.requestId,
       planKey,
       packageKey,
-      holdReason: "production_skill_adapters_pending",
+      ...(marketingDiscoveryPlanKey ? { marketingDiscoveryPlanKey } : {}),
+      holdReason,
     };
   }
 }
