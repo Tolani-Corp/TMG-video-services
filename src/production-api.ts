@@ -11,11 +11,28 @@ import {
 
 const RECOMMENDED_PART_SIZE_BYTES = 16 * 1024 * 1024;
 
+type ProductionRequestsBinding = NonNullable<Env["PRODUCTION_REQUESTS"]>;
+type ProductionWorkflowBinding = NonNullable<Env["PRODUCTION_WORKFLOW"]>;
+
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
     status,
     headers: { "cache-control": "no-store" },
   });
+}
+
+function requireProductionRequests(env: Env): ProductionRequestsBinding {
+  if (!env.PRODUCTION_REQUESTS) {
+    throw new Error("production request coordinator binding is not configured in this environment");
+  }
+  return env.PRODUCTION_REQUESTS;
+}
+
+function requireProductionWorkflow(env: Env): ProductionWorkflowBinding {
+  if (!env.PRODUCTION_WORKFLOW) {
+    throw new Error("production workflow binding is not configured in this environment");
+  }
+  return env.PRODUCTION_WORKFLOW;
 }
 
 function requestPath(pathname: string):
@@ -90,7 +107,7 @@ function allowedMimeType(kind: ChecklistItemKind, mimeType: string): boolean {
 }
 
 async function loadRequest(env: Env, productionRequestId: string): Promise<ProductionRequestSnapshot> {
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const coordinator = requireProductionRequests(env).getByName(productionRequestId);
   return coordinator.getSnapshot();
 }
 
@@ -101,7 +118,7 @@ async function createProductionRequest(request: Request, env: Env, traceId: stri
   }
   const productionRequestId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const coordinator = requireProductionRequests(env).getByName(productionRequestId);
   const snapshot = await coordinator.initialize({
     requestId: productionRequestId,
     tenantId: parsed.data.tenantId,
@@ -149,7 +166,7 @@ async function startMultipartUpload(
       artifactId,
     },
   });
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const coordinator = requireProductionRequests(env).getByName(productionRequestId);
   try {
     const authorization = await coordinator.registerUploadSession({
       itemId,
@@ -196,7 +213,7 @@ async function uploadMultipartPart(
   if (!uploadId || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000 || !request.body) {
     return json({ error: "invalid_upload_part", requestId: traceId }, 400);
   }
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const coordinator = requireProductionRequests(env).getByName(productionRequestId);
   const authorization = await coordinator.authorizeUpload(itemId, uploadId);
   if (!authorization.allowed || !authorization.session) {
     return json({ error: "upload_rejected", reasons: authorization.reasons, requestId: traceId }, 409);
@@ -217,7 +234,7 @@ async function completeMultipartUpload(
   if (!parsed.success) {
     return json({ error: "invalid_request", issues: parsed.error.issues, requestId: traceId }, 400);
   }
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const coordinator = requireProductionRequests(env).getByName(productionRequestId);
   const authorization = await coordinator.authorizeUpload(itemId, parsed.data.uploadId);
   if (!authorization.allowed || !authorization.session) {
     return json({ error: "upload_rejected", reasons: authorization.reasons, requestId: traceId }, 409);
@@ -251,7 +268,7 @@ async function abortMultipartUpload(
 ): Promise<Response> {
   const uploadId = url.searchParams.get("uploadId")?.trim();
   if (!uploadId) return json({ error: "upload_id_required", requestId: traceId }, 400);
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const coordinator = requireProductionRequests(env).getByName(productionRequestId);
   const authorization = await coordinator.authorizeUpload(itemId, uploadId);
   if (!authorization.allowed || !authorization.session) {
     return json({ error: "upload_rejected", reasons: authorization.reasons, requestId: traceId }, 409);
@@ -267,20 +284,22 @@ async function submitProductionRequest(
   productionRequestId: string,
   traceId: string,
 ): Promise<Response> {
-  const coordinator = env.PRODUCTION_REQUESTS.getByName(productionRequestId);
+  const requests = requireProductionRequests(env);
+  const workflow = requireProductionWorkflow(env);
+  const coordinator = requests.getByName(productionRequestId);
   const submittedAt = new Date().toISOString();
   const submission = await coordinator.submit(submittedAt);
   const workflowInstanceId = `production-${productionRequestId}`;
   let workflowCreated = false;
   try {
-    await env.PRODUCTION_WORKFLOW.create({
+    await workflow.create({
       id: workflowInstanceId,
       params: submission.plan,
     });
     workflowCreated = true;
   } catch (error) {
     try {
-      const existing = env.PRODUCTION_WORKFLOW.get(workflowInstanceId);
+      const existing = await workflow.get(workflowInstanceId);
       await existing.status();
       workflowCreated = true;
     } catch {
@@ -326,7 +345,7 @@ export async function handleProductionApi(
       if (!parsed.success) {
         return json({ error: "invalid_request", issues: parsed.error.issues, requestId: traceId }, 400);
       }
-      const coordinator = env.PRODUCTION_REQUESTS.getByName(path.requestId);
+      const coordinator = requireProductionRequests(env).getByName(path.requestId);
       const snapshot = await coordinator.setReference(path.itemId, parsed.data.value, new Date().toISOString());
       return json({ productionRequest: snapshot, requestId: traceId });
     }
