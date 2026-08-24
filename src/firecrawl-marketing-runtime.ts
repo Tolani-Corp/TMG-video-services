@@ -87,15 +87,15 @@ function normalizePage(value: unknown): FirecrawlMarketingPage | null {
     stringValue(value.url);
   if (!sourceUrl) return null;
 
+  const title = stringValue(metadata.title);
+  const description = stringValue(metadata.description);
   const markdown = stringValue(value.markdown)?.slice(0, MAX_MARKDOWN_CHARS) ?? "";
   const branding = isRecord(value.branding) ? value.branding : undefined;
 
   return {
     sourceUrl,
-    ...(stringValue(metadata.title) ? { title: stringValue(metadata.title) } : {}),
-    ...(stringValue(metadata.description)
-      ? { description: stringValue(metadata.description) }
-      : {}),
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
     markdown,
     links: stringList(value.links, MAX_LINKS_PER_PAGE),
     images: stringList(value.images, MAX_IMAGES_PER_PAGE),
