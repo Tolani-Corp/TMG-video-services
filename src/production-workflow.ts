@@ -1,0 +1,125 @@
+import {
+  WorkflowEntrypoint,
+  type WorkflowEvent,
+  type WorkflowStep,
+} from "cloudflare:workers";
+import {
+  productionPackageObjectKey,
+  productionPlanObjectKey,
+  type ProductionPlan,
+} from "./production-request";
+
+interface ProductionPackageManifest {
+  schemaVersion: "tmg.production-package.v1";
+  requestId: string;
+  tenantId: string;
+  status: "planned";
+  productionPlanKey: string;
+  deliverables: Array<{
+    type: string;
+    skill: string;
+    status: "pending_skill_activation";
+    artifacts: [];
+  }>;
+  publicationAuthority: false;
+  externalDistributionAuthority: false;
+  createdAt: string;
+}
+
+interface ProductionWorkflowResult {
+  status: "planned";
+  requestId: string;
+  planKey: string;
+  packageKey: string;
+  holdReason: "production_skill_adapters_pending";
+}
+
+function assertProductionPlan(value: unknown): asserts value is ProductionPlan {
+  if (!value || typeof value !== "object") throw new Error("production plan payload is required");
+  const candidate = value as Partial<ProductionPlan>;
+  if (candidate.schemaVersion !== "tmg.production-plan.v1") throw new Error("unsupported production plan version");
+  if (!candidate.requestId || !candidate.tenantId || !candidate.title) throw new Error("production plan identity is incomplete");
+  if (!Array.isArray(candidate.sourceInputs) || candidate.sourceInputs.length === 0) throw new Error("production plan source inputs are required");
+  if (!Array.isArray(candidate.deliverables) || candidate.deliverables.length === 0) throw new Error("production plan deliverables are required");
+  if (candidate.governance?.publicationAuthority !== false) throw new Error("production workflow cannot receive publication authority");
+  if (candidate.governance?.externalDistributionAuthority !== false) throw new Error("production workflow cannot receive external distribution authority");
+  if (candidate.governance?.rightsEvidenceRequired !== true) throw new Error("production plan must require rights evidence");
+}
+
+async function putImmutableJson(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
+  const serialized = JSON.stringify(value);
+  const existing = await bucket.get(key);
+  if (existing) {
+    const current = await existing.text();
+    if (current !== serialized) throw new Error(`immutable production artifact conflict: ${key}`);
+    return;
+  }
+  await bucket.put(key, serialized, {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: { immutable: "true", schema: "tmg-production-v1" },
+  });
+}
+
+export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> {
+  async run(
+    event: WorkflowEvent<ProductionPlan>,
+    step: WorkflowStep,
+  ): Promise<ProductionWorkflowResult> {
+    const plan = await step.do("validate immutable production plan", async () => {
+      assertProductionPlan(event.payload);
+      return event.payload;
+    });
+    const planKey = productionPlanObjectKey(plan.tenantId, plan.requestId);
+    const packageKey = productionPackageObjectKey(plan.tenantId, plan.requestId);
+
+    await step.do("persist immutable production plan", async () => {
+      await putImmutableJson(this.env.MEDIA_BUCKET, planKey, plan);
+    });
+
+    await step.do("bind processing state", async () => {
+      const coordinator = this.env.PRODUCTION_REQUESTS.getByName(plan.requestId);
+      await coordinator.markProcessing(event.instanceId, event.timestamp.toISOString());
+    });
+
+    const productionPackage: ProductionPackageManifest = await step.do(
+      "compile production package manifest",
+      async () => ({
+        schemaVersion: "tmg.production-package.v1",
+        requestId: plan.requestId,
+        tenantId: plan.tenantId,
+        status: "planned",
+        productionPlanKey: planKey,
+        deliverables: plan.deliverables.map((deliverable) => ({
+          type: deliverable.type,
+          skill: deliverable.skill,
+          status: "pending_skill_activation" as const,
+          artifacts: [] as [],
+        })),
+        publicationAuthority: false,
+        externalDistributionAuthority: false,
+        createdAt: event.timestamp.toISOString(),
+      }),
+    );
+
+    await step.do("persist production package manifest", async () => {
+      await putImmutableJson(this.env.MEDIA_BUCKET, packageKey, productionPackage);
+    });
+
+    await step.do("hold until governed production skills are active", async () => {
+      const coordinator = this.env.PRODUCTION_REQUESTS.getByName(plan.requestId);
+      await coordinator.recordWorkflowHold(
+        event.instanceId,
+        "production_skill_adapters_pending",
+        new Date().toISOString(),
+      );
+    });
+
+    return {
+      status: "planned",
+      requestId: plan.requestId,
+      planKey,
+      packageKey,
+      holdReason: "production_skill_adapters_pending",
+    };
+  }
+}
