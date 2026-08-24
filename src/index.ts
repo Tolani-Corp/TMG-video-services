@@ -100,6 +100,8 @@ export default {
         productionRequestApiEnabled: isEnabled(env.TMG_PRODUCTION_REQUEST_API_ENABLED),
         marketingDiscoveryEnabled: isEnabled(env.TMG_MARKETING_DISCOVERY_ENABLED),
         marketingVideoGenerationEnabled: isEnabled(env.TMG_MARKETING_VIDEO_GENERATION_ENABLED),
+        imageRuntimeEnabled: isEnabled(env.TMG_IMAGE_RUNTIME_ENABLED),
+        imageBindingConfigured: Boolean(env.IMAGES),
         policyVersion: env.TMG_POLICY_VERSION,
         requestId,
       });
@@ -194,6 +196,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export { IngestionWorkflow } from "./workflow";
+export { ImageProcessingWorkflow } from "./image-workflow";
 export { ProductionWorkflow } from "./production-workflow";
 export { RevocationWorkflow } from "./revocation-workflow";
 export { ProductionRequestCoordinator } from "./production-request-coordinator";
