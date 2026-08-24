@@ -3,7 +3,23 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from "cloudflare:workers";
+import { compileCampaignContextManifest, type CampaignContextManifest } from "./campaign-context";
+import {
+  getMarketingCrawlSnapshot,
+  startMarketingCrawl,
+  type FirecrawlMarketingCrawlSnapshot,
+} from "./firecrawl-marketing-runtime";
 import { buildMarketingDiscoveryPlan } from "./marketing-context";
+import {
+  compileMarketingCreativeBrief,
+  compileMarketingSocialCopy,
+  type MarketingCreativeBrief,
+} from "./marketing-creative";
+import {
+  generateMarketingVideoVariant,
+  type MarketingReviewPackage,
+  type MarketingVideoArtifact,
+} from "./marketing-video-runtime";
 import {
   marketingDiscoveryPlanObjectKey,
   productionPackageObjectKey,
@@ -32,14 +48,24 @@ interface ProductionPackageManifest {
 }
 
 interface ProductionWorkflowResult {
-  status: "planned";
+  status: "planned" | "ready_for_review";
   requestId: string;
   planKey: string;
   packageKey: string;
   marketingDiscoveryPlanKey?: string;
-  holdReason:
+  campaignContextKey?: string;
+  creativeBriefKey?: string;
+  reviewPackageKey?: string;
+  holdReason?:
     | "production_skill_adapters_pending"
-    | "marketing_discovery_adapter_pending";
+    | "marketing_discovery_runtime_disabled"
+    | "marketing_discovery_secret_missing"
+    | "authenticated_crawl_credential_resolver_pending"
+    | "marketing_video_provider_pending";
+}
+
+interface MarketingRuntimeSecretEnv extends Env {
+  FIRECRAWL_API_KEY?: string;
 }
 
 function assertProductionPlan(value: unknown): asserts value is ProductionPlan {
@@ -74,11 +100,63 @@ async function putImmutableJson(bucket: R2Bucket, key: string, value: unknown): 
   });
 }
 
+async function readJson<T>(bucket: R2Bucket, key: string): Promise<T> {
+  const object = await bucket.get(key);
+  if (!object) throw new Error(`required marketing artifact is missing: ${key}`);
+  return object.json<T>();
+}
+
 function requireProductionRequests(env: Env): NonNullable<Env["PRODUCTION_REQUESTS"]> {
   if (!env.PRODUCTION_REQUESTS) {
     throw new Error("production request coordinator binding is not configured in this environment");
   }
   return env.PRODUCTION_REQUESTS;
+}
+
+function campaignContextKey(tenantId: string, requestId: string): string {
+  return `tenants/${tenantId}/production-requests/${requestId}/marketing/campaign-context-v1.json`;
+}
+
+function creativeBriefKey(tenantId: string, requestId: string): string {
+  return `tenants/${tenantId}/production-requests/${requestId}/marketing/creative-brief-v1.json`;
+}
+
+function socialCopyKey(tenantId: string, requestId: string): string {
+  return `tenants/${tenantId}/production-requests/${requestId}/marketing/social-copy-v1.json`;
+}
+
+function reviewPackageKey(tenantId: string, requestId: string): string {
+  return `tenants/${tenantId}/production-requests/${requestId}/outputs/marketing/review-package-v1.json`;
+}
+
+function crawlSnapshotKey(
+  tenantId: string,
+  requestId: string,
+  sourceIndex: number,
+  jobId: string,
+): string {
+  const safeJobId = jobId.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 160);
+  return `tenants/${tenantId}/production-requests/${requestId}/marketing/discovery/source-${sourceIndex + 1}-${safeJobId}.json`;
+}
+
+async function hold(
+  env: Env,
+  event: WorkflowEvent<ProductionPlan>,
+  reason: NonNullable<ProductionWorkflowResult["holdReason"]>,
+): Promise<void> {
+  const coordinator = requireProductionRequests(env).getByName(event.payload.requestId);
+  await coordinator.recordWorkflowHold(event.instanceId, reason, event.timestamp.toISOString());
+}
+
+function marketingVideoRuntimeReady(env: Env): boolean {
+  const acceptance = String(env.TMG_MARKETING_VIDEO_PROVIDER_ACCEPTANCE_STATE ?? "unverified");
+  return (
+    String(env.TMG_MARKETING_VIDEO_GENERATION_ENABLED) === "true" &&
+    String(env.TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED) === "true" &&
+    env.TMG_MARKETING_VIDEO_PROVIDER_ID === "pruna/p-video" &&
+    (acceptance === "development_canary" || acceptance === "verified") &&
+    Boolean(env.AI)
+  );
 }
 
 export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> {
@@ -147,26 +225,216 @@ export class ProductionWorkflow extends WorkflowEntrypoint<Env, ProductionPlan> 
       await putImmutableJson(this.env.MEDIA_BUCKET, packageKey, productionPackage);
     });
 
-    const holdReason = marketingDiscoveryPlan
-      ? "marketing_discovery_adapter_pending" as const
-      : "production_skill_adapters_pending" as const;
+    if (!marketingDiscoveryPlan || !marketingDiscoveryPlanKey) {
+      await step.do("hold non-marketing request for production skills", async () => {
+        await hold(this.env, event, "production_skill_adapters_pending");
+      });
+      return {
+        status: "planned",
+        requestId: plan.requestId,
+        planKey,
+        packageKey,
+        holdReason: "production_skill_adapters_pending",
+      };
+    }
 
-    await step.do("hold until governed adapters are active", async () => {
-      const coordinator = requireProductionRequests(this.env).getByName(plan.requestId);
-      await coordinator.recordWorkflowHold(
-        event.instanceId,
-        holdReason,
-        new Date().toISOString(),
+    const runtimeEnv = this.env as MarketingRuntimeSecretEnv;
+    if (String(runtimeEnv.TMG_MARKETING_DISCOVERY_ENABLED) !== "true") {
+      await step.do("hold disabled marketing discovery runtime", async () => {
+        await hold(this.env, event, "marketing_discovery_runtime_disabled");
+      });
+      return {
+        status: "planned",
+        requestId: plan.requestId,
+        planKey,
+        packageKey,
+        marketingDiscoveryPlanKey,
+        holdReason: "marketing_discovery_runtime_disabled",
+      };
+    }
+    if (!runtimeEnv.FIRECRAWL_API_KEY?.trim()) {
+      await step.do("hold missing marketing discovery secret", async () => {
+        await hold(this.env, event, "marketing_discovery_secret_missing");
+      });
+      return {
+        status: "planned",
+        requestId: plan.requestId,
+        planKey,
+        packageKey,
+        marketingDiscoveryPlanKey,
+        holdReason: "marketing_discovery_secret_missing",
+      };
+    }
+    if (marketingDiscoveryPlan.sources.some((source) => source.authorization.authenticatedCrawlAuthorized)) {
+      await step.do("hold authenticated crawl until credential resolver exists", async () => {
+        await hold(this.env, event, "authenticated_crawl_credential_resolver_pending");
+      });
+      return {
+        status: "planned",
+        requestId: plan.requestId,
+        planKey,
+        packageKey,
+        marketingDiscoveryPlanKey,
+        holdReason: "authenticated_crawl_credential_resolver_pending",
+      };
+    }
+
+    const crawlKeys: string[] = [];
+    for (let sourceIndex = 0; sourceIndex < marketingDiscoveryPlan.sources.length; sourceIndex += 1) {
+      const source = marketingDiscoveryPlan.sources[sourceIndex];
+      if (!source) throw new Error("marketing discovery source is missing");
+      const started = await step.do(
+        `start marketing crawl ${sourceIndex + 1}`,
+        { retries: { limit: 1, delay: "1 second", backoff: "constant" }, timeout: "2 minutes" },
+        async () => startMarketingCrawl(runtimeEnv, source),
       );
+
+      let completedKey: string | undefined;
+      for (let poll = 0; poll < 120; poll += 1) {
+        const snapshotState = await step.do(
+          `poll marketing crawl ${sourceIndex + 1} attempt ${poll + 1}`,
+          { retries: { limit: 3, delay: "5 seconds", backoff: "exponential" }, timeout: "2 minutes" },
+          async () => {
+            const snapshot = await getMarketingCrawlSnapshot(runtimeEnv, started.jobId);
+            if (snapshot.status === "failed") {
+              throw new Error(`Firecrawl marketing crawl failed: ${started.jobId}`);
+            }
+            if (snapshot.status === "completed") {
+              const key = crawlSnapshotKey(
+                plan.tenantId,
+                plan.requestId,
+                sourceIndex,
+                started.jobId,
+              );
+              await putImmutableJson(this.env.MEDIA_BUCKET, key, snapshot);
+              return {
+                status: snapshot.status,
+                key,
+                total: snapshot.total,
+                completed: snapshot.completed,
+              };
+            }
+            return {
+              status: snapshot.status,
+              total: snapshot.total,
+              completed: snapshot.completed,
+            };
+          },
+        );
+        if (snapshotState.status === "completed" && snapshotState.key) {
+          completedKey = snapshotState.key;
+          break;
+        }
+        await step.sleep(`wait for marketing crawl ${sourceIndex + 1} attempt ${poll + 1}`, "5 seconds");
+      }
+      if (!completedKey) throw new Error(`Firecrawl marketing crawl timed out: ${started.jobId}`);
+      crawlKeys.push(completedKey);
+    }
+
+    const contextKey = campaignContextKey(plan.tenantId, plan.requestId);
+    const context = await step.do("compile canonical campaign context", async () => {
+      const crawls: FirecrawlMarketingCrawlSnapshot[] = [];
+      for (const key of crawlKeys) {
+        crawls.push(await readJson<FirecrawlMarketingCrawlSnapshot>(this.env.MEDIA_BUCKET, key));
+      }
+      const manifest = compileCampaignContextManifest({
+        discoveryPlan: marketingDiscoveryPlan,
+        crawls,
+        compiledAt: event.timestamp.toISOString(),
+      });
+      await putImmutableJson(this.env.MEDIA_BUCKET, contextKey, manifest);
+      return manifest;
+    });
+
+    const briefKey = creativeBriefKey(plan.tenantId, plan.requestId);
+    const creativeBrief = await step.do("compile target-aware marketing creative brief", async () => {
+      const brief = compileMarketingCreativeBrief({
+        plan,
+        context: context as CampaignContextManifest,
+        compiledAt: event.timestamp.toISOString(),
+      });
+      await putImmutableJson(this.env.MEDIA_BUCKET, briefKey, brief);
+      return brief;
+    });
+
+    let copyKey: string | undefined;
+    if (plan.deliverables.some((deliverable) => deliverable.type === "social_copy")) {
+      copyKey = socialCopyKey(plan.tenantId, plan.requestId);
+      await step.do("compile grounded social copy", async () => {
+        const socialCopy = compileMarketingSocialCopy(creativeBrief as MarketingCreativeBrief);
+        await putImmutableJson(this.env.MEDIA_BUCKET, copyKey as string, socialCopy);
+      });
+    }
+
+    const wantsMarketingVideos = plan.deliverables.some(
+      (deliverable) => deliverable.type === "branded_marketing_videos",
+    );
+    if (wantsMarketingVideos && !marketingVideoRuntimeReady(this.env)) {
+      await step.do("hold marketing video generation pending provider authority", async () => {
+        await hold(this.env, event, "marketing_video_provider_pending");
+      });
+      return {
+        status: "planned",
+        requestId: plan.requestId,
+        planKey,
+        packageKey,
+        marketingDiscoveryPlanKey,
+        campaignContextKey: contextKey,
+        creativeBriefKey: briefKey,
+        holdReason: "marketing_video_provider_pending",
+      };
+    }
+
+    const videos: MarketingVideoArtifact[] = [];
+    if (wantsMarketingVideos) {
+      for (let index = 0; index < creativeBrief.variants.length; index += 1) {
+        const variant = creativeBrief.variants[index];
+        if (!variant) continue;
+        const artifact = await step.do(
+          `generate branded marketing video ${index + 1}`,
+          { retries: { limit: 1, delay: "1 second", backoff: "constant" }, timeout: "30 minutes" },
+          async () => generateMarketingVideoVariant(this.env, {
+            requestId: plan.requestId,
+            tenantId: plan.tenantId,
+            variant,
+            createdAt: event.timestamp.toISOString(),
+          }),
+        );
+        videos.push(artifact);
+      }
+    }
+
+    const finalReviewKey = reviewPackageKey(plan.tenantId, plan.requestId);
+    const reviewPackage: MarketingReviewPackage = {
+      schemaVersion: "tmg.marketing-review-package.v1",
+      requestId: plan.requestId,
+      tenantId: plan.tenantId,
+      campaignContextKey: contextKey,
+      creativeBriefKey: briefKey,
+      ...(copyKey ? { socialCopyKey: copyKey } : {}),
+      videos,
+      humanReviewRequired: true,
+      publicationAuthority: false,
+      externalDistributionAuthority: false,
+      createdAt: event.timestamp.toISOString(),
+    };
+    await step.do("persist marketing review package", async () => {
+      await putImmutableJson(this.env.MEDIA_BUCKET, finalReviewKey, reviewPackage);
+    });
+    await step.do("complete production into human review", async () => {
+      const coordinator = requireProductionRequests(this.env).getByName(plan.requestId);
+      await coordinator.markCompleted(event.instanceId, event.timestamp.toISOString());
     });
 
     return {
-      status: "planned",
+      status: "ready_for_review",
       requestId: plan.requestId,
       planKey,
       packageKey,
-      ...(marketingDiscoveryPlanKey ? { marketingDiscoveryPlanKey } : {}),
-      holdReason,
+      marketingDiscoveryPlanKey,
+      campaignContextKey: contextKey,
+      creativeBriefKey: briefKey,
+      reviewPackageKey: finalReviewKey,
     };
   }
 }
