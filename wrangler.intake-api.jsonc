@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tmg-video-intake-api-dev",
+  "main": "src/intake-api-worker.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "console.tolanimediagroup.com/v1/console/*",
+      "zone_name": "tolanimediagroup.com"
+    },
+    {
+      "pattern": "console.tolanimediagroup.com/v1/intake/*",
+      "zone_name": "tolanimediagroup.com"
+    }
+  ],
+  "vars": {
+    "TMG_PUBLIC_API_ENABLED": "false",
+    "TMG_MCP_ENABLED": "false",
+    "TMG_INGEST_WORKFLOW_ENABLED": "false",
+    "TMG_INGESTION_MODE": "fixture_only",
+    "TMG_POLICY_VERSION": "2026-08-20.v3",
+    "TMG_EMBEDDING_DIMENSIONS": "512",
+    "TMG_EMBEDDING_PROVIDER_ID": "fixture",
+    "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
+    "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified",
+    "TMG_TENANT_USAGE_LEDGER_ENABLED": "false",
+    "TMG_INTAKE_ENABLED": "false",
+    "TMG_CONTROL_DB_BINDING_STATE": "unprovisioned",
+    "TMG_CONSOLE_HOST": "console.tolanimediagroup.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "CONTROL_DB",
+      "database_name": "tmg-video-control-dev",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "tmg-video-assets-dev"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
