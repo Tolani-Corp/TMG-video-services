@@ -1,8 +1,14 @@
+import {
+  exactIncludePathPatterns,
+  selectMarketingMapLinks,
+  type MarketingMapLink,
+} from "./marketing-execution-planner";
 import type {
   MarketingDiscoverySourcePlan,
 } from "./marketing-context";
 
 const FIRECRAWL_API_HOST = "api.firecrawl.dev";
+const FIRECRAWL_BASE_URL = `https://${FIRECRAWL_API_HOST}/v2`;
 const MAX_MARKDOWN_CHARS = 16_000;
 const MAX_LINKS_PER_PAGE = 100;
 const MAX_IMAGES_PER_PAGE = 100;
@@ -33,6 +39,18 @@ export interface FirecrawlMarketingCrawlSnapshot {
   pages: FirecrawlMarketingPage[];
 }
 
+export interface FirecrawlMarketingStartResult {
+  jobId: string;
+  discovery: {
+    requestedMode: MarketingDiscoverySourcePlan["discovery"]["mode"];
+    effectiveMode: "direct" | "map_rank_crawl" | "bounded_crawl";
+    mappedLinkCount: number;
+    selectedUrlCount: number;
+    selectedUrls: string[];
+    fallbackUsed: boolean;
+  };
+}
+
 interface FirecrawlStartResponse {
   success?: boolean;
   id?: string;
@@ -45,6 +63,11 @@ interface FirecrawlStatusResponse {
   creditsUsed?: number;
   next?: string | null;
   data?: unknown[];
+}
+
+interface FirecrawlMapResponse {
+  success?: boolean;
+  links?: unknown[];
 }
 
 function requireRuntime(env: FirecrawlMarketingRuntimeEnv): string {
@@ -104,12 +127,31 @@ function normalizePage(value: unknown): FirecrawlMarketingPage | null {
   };
 }
 
+function normalizeMapLink(value: unknown): MarketingMapLink | null {
+  if (typeof value === "string" && value.trim()) return { url: value.trim() };
+  if (!isRecord(value)) return null;
+  const url = stringValue(value.url);
+  if (!url) return null;
+  const title = stringValue(value.title);
+  const description = stringValue(value.description);
+  return {
+    url,
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
+  };
+}
+
 function assertProviderUrl(value: string): string {
   const parsed = new URL(value);
   if (parsed.protocol !== "https:" || parsed.hostname !== FIRECRAWL_API_HOST) {
     throw new Error("Firecrawl pagination URL failed provider host validation");
   }
   return parsed.toString();
+}
+
+function compactProviderError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]").slice(0, 800);
 }
 
 async function providerJson<T>(response: Response, operation: string): Promise<T> {
@@ -120,28 +162,137 @@ async function providerJson<T>(response: Response, operation: string): Promise<T
   return response.json<T>();
 }
 
-export async function startMarketingCrawl(
-  env: FirecrawlMarketingRuntimeEnv,
-  source: MarketingDiscoverySourcePlan,
-): Promise<{ jobId: string }> {
-  const apiKey = requireRuntime(env);
-  if (source.authorization.authenticatedCrawlAuthorized) {
-    throw new Error("authenticated crawl credential resolver is not implemented");
-  }
-
-  const response = await fetch(source.endpoint, {
+async function firecrawlPost<T>(
+  apiKey: string,
+  path: string,
+  body: unknown,
+  operation: string,
+): Promise<T> {
+  const response = await fetch(`${FIRECRAWL_BASE_URL}${path}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(source.request),
+    body: JSON.stringify(body),
   });
-  const parsed = await providerJson<FirecrawlStartResponse>(response, "crawl start");
+  return providerJson<T>(response, operation);
+}
+
+export async function mapMarketingSource(
+  env: FirecrawlMarketingRuntimeEnv,
+  source: MarketingDiscoverySourcePlan,
+): Promise<MarketingMapLink[]> {
+  const apiKey = requireRuntime(env);
+  if (source.discovery.mode !== "map_rank_crawl") return [];
+
+  const response = await firecrawlPost<FirecrawlMapResponse>(apiKey, "/map", {
+    url: source.sourceUrl,
+    search: source.discovery.searchQuery || undefined,
+    sitemap: "include",
+    includeSubdomains: source.request.allowSubdomains,
+    ignoreQueryParameters: true,
+    ignoreCache: true,
+    limit: source.discovery.mapLimit,
+    timeout: 45_000,
+  }, "map");
+
+  return (response.links ?? [])
+    .map(normalizeMapLink)
+    .filter((link): link is MarketingMapLink => link !== null)
+    .slice(0, source.discovery.mapLimit);
+}
+
+export async function startMarketingCrawl(
+  env: FirecrawlMarketingRuntimeEnv,
+  source: MarketingDiscoverySourcePlan,
+): Promise<FirecrawlMarketingStartResult> {
+  const apiKey = requireRuntime(env);
+  if (source.authorization.authenticatedCrawlAuthorized) {
+    throw new Error("authenticated crawl credential resolver is not implemented");
+  }
+
+  let request = { ...source.request };
+  let mappedLinkCount = 0;
+  let selectedUrls: string[] = [];
+  let fallbackUsed = false;
+  let effectiveMode: FirecrawlMarketingStartResult["discovery"]["effectiveMode"] = source.discovery.mode;
+
+  if (source.discovery.mode === "direct") {
+    request = {
+      ...request,
+      limit: 1,
+      maxDiscoveryDepth: 0,
+    };
+  } else if (source.discovery.mode === "map_rank_crawl" && request.includePaths.length === 0) {
+    try {
+      const mapped = await mapMarketingSource(env, source);
+      mappedLinkCount = mapped.length;
+      const selected = selectMarketingMapLinks({
+        sourceUrl: source.sourceUrl,
+        allowSubdomains: request.allowSubdomains,
+        goal: source.discovery.goal,
+        pageLimit: source.discovery.pageLimit,
+        links: mapped,
+      });
+      selectedUrls = selected.map((link) => link.url);
+      const includePaths = exactIncludePathPatterns(selectedUrls, source.sourceUrl);
+      if (includePaths.length > 0) {
+        request = {
+          ...request,
+          includePaths,
+          limit: Math.min(request.limit, includePaths.length),
+          maxDiscoveryDepth: Math.min(request.maxDiscoveryDepth, 1),
+        };
+      } else {
+        fallbackUsed = true;
+        effectiveMode = "bounded_crawl";
+      }
+    } catch (error) {
+      fallbackUsed = true;
+      effectiveMode = "bounded_crawl";
+      console.warn(JSON.stringify({
+        level: "warn",
+        event: "marketing_map_rank_fallback",
+        sourceUrl: source.sourceUrl,
+        error: compactProviderError(error),
+      }));
+    }
+  }
+
+  const parsed = await firecrawlPost<FirecrawlStartResponse>(
+    apiKey,
+    "/crawl",
+    request,
+    "crawl start",
+  );
   if (parsed.success !== true || !parsed.id) {
     throw new Error("Firecrawl crawl start did not return a job id");
   }
-  return { jobId: parsed.id };
+
+  console.log(JSON.stringify({
+    level: "info",
+    event: "marketing_discovery_started",
+    jobId: parsed.id,
+    sourceUrl: source.sourceUrl,
+    requestedMode: source.discovery.mode,
+    effectiveMode,
+    mappedLinkCount,
+    selectedUrlCount: selectedUrls.length,
+    fallbackUsed,
+  }));
+
+  return {
+    jobId: parsed.id,
+    discovery: {
+      requestedMode: source.discovery.mode,
+      effectiveMode,
+      mappedLinkCount,
+      selectedUrlCount: selectedUrls.length,
+      selectedUrls,
+      fallbackUsed,
+    },
+  };
 }
 
 async function getStatusPage(
@@ -159,7 +310,7 @@ export async function getMarketingCrawlSnapshot(
   jobId: string,
 ): Promise<FirecrawlMarketingCrawlSnapshot> {
   const apiKey = requireRuntime(env);
-  const firstUrl = `https://${FIRECRAWL_API_HOST}/v2/crawl/${encodeURIComponent(jobId)}`;
+  const firstUrl = `${FIRECRAWL_BASE_URL}/crawl/${encodeURIComponent(jobId)}`;
   const first = await getStatusPage(apiKey, firstUrl);
   const status = first.status;
   if (status !== "scraping" && status !== "completed" && status !== "failed") {
