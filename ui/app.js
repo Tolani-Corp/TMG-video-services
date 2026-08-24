@@ -119,7 +119,7 @@ function collectFormValue(name) {
 }
 
 function selectedDeliverables() {
-  return $$('input[name="deliverables"]:checked').map((input) => input.value);
+  return $$("input[name=\"deliverables\"]:checked").map((input) => input.value);
 }
 
 function currentChecklist() {
@@ -238,11 +238,11 @@ function hydrateDraft() {
     if (control && typeof draft[name] === "string") control.value = draft[name];
   });
 
-  const rights = $('[name="rightsConfirmed"]');
+  const rights = $("[name=\"rightsConfirmed\"]");
   if (rights instanceof HTMLInputElement) rights.checked = draft.rightsConfirmed === true;
 
   const deliverables = new Set(Array.isArray(draft.deliverables) ? draft.deliverables : []);
-  $$('input[name="deliverables"]').forEach((input) => {
+  $$("input[name=\"deliverables\"]").forEach((input) => {
     if (input instanceof HTMLInputElement) input.checked = deliverables.has(input.value);
   });
 
@@ -354,7 +354,7 @@ function setupForm() {
     renderChecklist();
   });
 
-  const fileInput = $('[name="sourceFiles"]');
+  const fileInput = $("[name=\"sourceFiles\"]");
   if (fileInput instanceof HTMLInputElement) {
     fileInput.addEventListener("change", () => {
       const incoming = Array.from(fileInput.files || []).map(fileMetadata);
@@ -401,11 +401,20 @@ function setupNavigation() {
 }
 
 function setupChoiceStates() {
-  $$('input[name="deliverables"]').forEach((input) => {
+  $$("input[name=\"deliverables\"]").forEach((input) => {
     const sync = () => input.closest(".choice")?.classList.toggle("is-selected", input.checked);
     input.addEventListener("change", sync);
     sync();
   });
+}
+
+function loadAuthenticatedIntakeWorkspace() {
+  if (document.querySelector('script[data-tmg-intake="true"]')) return;
+  const script = document.createElement("script");
+  script.src = "/intake.js";
+  script.defer = true;
+  script.dataset.tmgIntake = "true";
+  document.head.append(script);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -413,4 +422,5 @@ document.addEventListener("DOMContentLoaded", () => {
   setupForm();
   setupChoiceStates();
   loadBootstrap();
+  loadAuthenticatedIntakeWorkspace();
 });
