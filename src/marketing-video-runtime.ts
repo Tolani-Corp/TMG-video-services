@@ -34,17 +34,11 @@ export interface MarketingReviewPackage {
   createdAt: string;
 }
 
-interface MarketingVideoRuntimeEnv extends Env {
-  TMG_MARKETING_VIDEO_GENERATION_ENABLED?: string;
-  TMG_MARKETING_VIDEO_PROVIDER_ID?: string;
-  TMG_MARKETING_VIDEO_PROVIDER_ACCEPTANCE_STATE?: string;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function requireVideoRuntime(env: MarketingVideoRuntimeEnv): NonNullable<Env["AI"]> {
+function requireVideoRuntime(env: Env): NonNullable<Env["AI"]> {
   if (String(env.TMG_MARKETING_VIDEO_GENERATION_ENABLED) !== "true") {
     throw new Error("marketing video generation runtime is disabled");
   }
@@ -100,7 +94,7 @@ export function marketingVideoObjectKey(
 }
 
 export async function generateMarketingVideoVariant(
-  env: MarketingVideoRuntimeEnv,
+  env: Env,
   input: {
     requestId: string;
     tenantId: string;
@@ -176,7 +170,7 @@ export async function generateMarketingVideoVariant(
 }
 
 export async function generateMarketingVideoSet(
-  env: MarketingVideoRuntimeEnv,
+  env: Env,
   brief: MarketingCreativeBrief,
 ): Promise<MarketingVideoArtifact[]> {
   const artifacts: MarketingVideoArtifact[] = [];
