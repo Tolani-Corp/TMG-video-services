@@ -1,4 +1,4 @@
-import { NonRetryableError } from "cloudflare:workers";
+import { NonRetryableError } from "cloudflare:workflows";
 import type { MarketingCreativeBrief, MarketingCreativeVariant } from "./marketing-creative";
 
 const MAX_GENERATED_VIDEO_BYTES = 250 * 1024 * 1024;
