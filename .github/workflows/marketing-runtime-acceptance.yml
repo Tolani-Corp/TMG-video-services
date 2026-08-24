@@ -12,6 +12,21 @@ on:
       - feature/checklist-production-intake-v1
     paths:
       - .github/workflows/marketing-runtime-acceptance.yml
+      - src/campaign-context.ts
+      - src/firecrawl-marketing-runtime.ts
+      - src/marketing-context.ts
+      - src/marketing-creative.ts
+      - src/marketing-video-runtime.ts
+      - src/production-api.ts
+      - src/production-request.ts
+      - src/production-workflow.ts
+      - src/index.ts
+      - src/ui-bootstrap.ts
+      - scripts/render-marketing-runtime-acceptance-config.mjs
+      - scripts/run-marketing-runtime-acceptance.mjs
+      - scripts/verify-marketing-runtime-acceptance.mjs
+      - tests/production-intake-marketing.test.ts
+      - wrangler.jsonc
 
 permissions:
   contents: read
