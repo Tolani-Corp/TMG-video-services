@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feat/authenticated-intake-job-control-v1
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -11,11 +14,12 @@ permissions:
   statuses: write
 
 concurrency:
-  group: tmg-intake-control-plane-bootstrap
+  group: tmg-intake-control-plane-bootstrap-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
   bootstrap:
+    if: ${{ github.event_name != 'pull_request' || github.head_ref == 'feat/authenticated-intake-job-control-v1' }}
     environment: development
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -24,10 +28,12 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
       D1_NAME: tmg-video-control-dev
       CONSOLE_HOST: console.tolanimediagroup.com
-      BOOTSTRAP_SHA: ${{ github.sha }}
+      BOOTSTRAP_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BOOTSTRAP_SHA }}
 
       - name: Verify Cloudflare credential contract
         shell: bash
