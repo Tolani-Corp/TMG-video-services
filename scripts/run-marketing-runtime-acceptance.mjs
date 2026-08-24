@@ -8,25 +8,44 @@ if (!baseUrl) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function isTransientWorkersDevNotFound(response, body) {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  return (
+    response.status === 404 &&
+    contentType.includes("text/html") &&
+    /<title>Page not found<\/title>/i.test(body)
+  );
+}
+
 async function requestJson(path, init = {}) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init.headers ?? {}),
-    },
-  });
-  const body = await response.text();
-  let parsed;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    parsed = { raw: body.slice(0, 2000) };
+  const maxPlatformRoutingAttempts = 20;
+  for (let attempt = 1; attempt <= maxPlatformRoutingAttempts; attempt += 1) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
+      },
+    });
+    const body = await response.text();
+
+    if (isTransientWorkersDevNotFound(response, body) && attempt < maxPlatformRoutingAttempts) {
+      await sleep(1000);
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      parsed = { raw: body.slice(0, 2000) };
+    }
+    if (!response.ok) {
+      throw new Error(`${init.method ?? "GET"} ${path} failed (${response.status}): ${JSON.stringify(parsed).slice(0, 2000)}`);
+    }
+    return parsed;
   }
-  if (!response.ok) {
-    throw new Error(`${init.method ?? "GET"} ${path} failed (${response.status}): ${JSON.stringify(parsed).slice(0, 2000)}`);
-  }
-  return parsed;
+  throw new Error(`${init.method ?? "GET"} ${path} exhausted workers.dev routing retries`);
 }
 
 const create = await requestJson("/v1/production/requests", {
