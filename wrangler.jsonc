@@ -19,6 +19,10 @@
     "TMG_PUBLIC_API_ENABLED": "false",
     "TMG_MCP_ENABLED": "false",
     "TMG_PRODUCTION_REQUEST_API_ENABLED": "false",
+    "TMG_MARKETING_DISCOVERY_ENABLED": "false",
+    "TMG_MARKETING_VIDEO_GENERATION_ENABLED": "false",
+    "TMG_MARKETING_VIDEO_PROVIDER_ID": "pruna/p-video",
+    "TMG_MARKETING_VIDEO_PROVIDER_ACCEPTANCE_STATE": "unverified",
     "TMG_INGEST_WORKFLOW_ENABLED": "false",
     "TMG_INGESTION_MODE": "fixture_only",
     "TMG_POLICY_VERSION": "2026-08-20.v3",
@@ -27,6 +31,9 @@
     "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
     "TMG_PROVIDER_ACCEPTANCE_STATE": "unverified",
     "TMG_TENANT_USAGE_LEDGER_ENABLED": "false"
+  },
+  "ai": {
+    "binding": "AI"
   },
   "durable_objects": {
     "bindings": [
