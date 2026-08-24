@@ -160,11 +160,14 @@ jobs:
         run: node scripts/verify-marketing-runtime-acceptance.mjs
 
       - name: Capture Workflow evidence
+        if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          WORKFLOW_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).workflowInstanceId')"
-          pnpm exec wrangler workflows instances describe "${TMG_MARKETING_ACCEPT_WORKFLOW}" "${WORKFLOW_ID}" --config .wrangler.marketing.acceptance.json > marketing-workflow.txt
+          set +e
+          if [ ! -f marketing-acceptance-request.json ]; then exit 0; fi
+          WORKFLOW_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).workflowInstanceId || ""')"
+          if [ -z "${WORKFLOW_ID}" ]; then exit 0; fi
+          pnpm exec wrangler workflows instances describe "${TMG_MARKETING_ACCEPT_WORKFLOW}" "${WORKFLOW_ID}" --config .wrangler.marketing.acceptance.json > marketing-workflow.txt 2>&1 || true
 
       - name: Upload sanitized acceptance evidence
         if: always()
