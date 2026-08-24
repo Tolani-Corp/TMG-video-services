@@ -43,18 +43,49 @@ function requireIntakeEnabled(env: Env): void {
   }
 }
 
+async function readBoundedBody(request: Request): Promise<Uint8Array> {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const result = await reader.read();
+    if (result.done) break;
+    total += result.value.byteLength;
+    if (total > JSON_BODY_LIMIT_BYTES) {
+      await reader.cancel("control-plane JSON body limit exceeded");
+      throw new IntakeConflictError("JSON request body exceeds the 64 KiB control-plane limit");
+    }
+    chunks.push(result.value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+
 async function parseJson<T>(request: Request, schema: ZodType<T>): Promise<T> {
   const type = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (type !== "application/json") {
     throw new IntakeConflictError("content-type must be application/json");
   }
   const rawLength = request.headers.get("content-length");
-  if (!rawLength) throw new IntakeConflictError("content-length is required");
-  const length = Number(rawLength);
-  if (!Number.isSafeInteger(length) || length < 0 || length > JSON_BODY_LIMIT_BYTES) {
-    throw new IntakeConflictError("JSON request body exceeds the 64 KiB control-plane limit");
+  if (rawLength) {
+    const length = Number(rawLength);
+    if (!Number.isSafeInteger(length) || length < 0 || length > JSON_BODY_LIMIT_BYTES) {
+      throw new IntakeConflictError("JSON request body exceeds the 64 KiB control-plane limit");
+    }
   }
-  return schema.parse(await request.json());
+  const body = await readBoundedBody(request);
+  try {
+    return schema.parse(JSON.parse(new TextDecoder().decode(body)));
+  } catch (error) {
+    if (error instanceof ZodError) throw error;
+    throw new IntakeConflictError("request body is not valid JSON");
+  }
 }
 
 function requireUploadHeaders(
@@ -94,6 +125,10 @@ async function putIntegrityBoundObject(
     httpMetadata: { contentType: expected.mime_type },
     customMetadata: metadata,
   });
+  if (stored.size !== expected.expected_bytes) {
+    await bucket.delete(key);
+    throw new IntakeConflictError("stored object byte count did not match registered bytes");
+  }
   return { version: stored.version, etag: stored.etag };
 }
 
@@ -194,8 +229,13 @@ export async function handleIntakeApi(
     const rightsReviewMatch = matches(url, /^\/v1\/intake\/rights\/([^/]+)\/review$/);
     if (request.method === "POST" && rightsReviewMatch) {
       const input = await parseJson(request, verifyRightsEvidenceSchema);
+      const evidenceId = decodeURIComponent(rightsReviewMatch[1]!);
+      const registeredEvidence = await store.getRightsEvidence(evidenceId);
+      if (input.decision === "verify" && registeredEvidence.grants_internal_processing !== 1) {
+        throw new IntakeConflictError("rights evidence does not claim internal processing authority and cannot satisfy the v1 processing-rights gate");
+      }
       const evidence = await store.reviewRightsEvidence(
-        decodeURIComponent(rightsReviewMatch[1]!),
+        evidenceId,
         actor,
         input.decision,
         input.rationale,
