@@ -102,7 +102,9 @@ describe("TMG production intake marketing model", () => {
     const discovery = buildMarketingDiscoveryPlan(plan);
     expect(discovery).not.toBeNull();
     expect(discovery?.sources[0]?.provider).toBe("firecrawl_v2");
-    expect(discovery?.sources[0]?.request.limit).toBe(40);
+    expect(discovery?.sources[0]?.discovery.mode).toBe("bounded_crawl");
+    expect(discovery?.sources[0]?.request.limit).toBe(12);
+    expect(discovery?.sources[0]?.request.includePaths).toEqual(["/app", "/features", "/pricing"]);
     expect(discovery?.sources[0]?.request.allowExternalLinks).toBe(false);
     expect(discovery?.sources[0]?.request.ignoreRobotsTxt).toBe(false);
     expect(discovery?.sources[0]?.assetReuse.authorizedByRequester).toBe(false);
