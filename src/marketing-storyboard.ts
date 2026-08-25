@@ -18,7 +18,9 @@ export interface MarketingStoryboardFrameArtifact {
   model: typeof WORKERS_AI_STORYBOARD_MODEL;
   generationMode: "storyboard_keyframe";
   renderPhase: "preview";
-  seed: number;
+  creativePlanSeed: number;
+  providerSeedApplied: false;
+  diffusionSteps: 4;
   humanReviewRequired: true;
   publicationAuthority: false;
   externalDistributionAuthority: false;
@@ -36,6 +38,8 @@ export interface MarketingStoryboardReviewPackage {
     model: typeof WORKERS_AI_STORYBOARD_MODEL;
     generationMode: "storyboard_keyframe";
     freeNeuronPreview: true;
+    providerSeedApplied: false;
+    diffusionSteps: 4;
   };
   humanReviewRequired: true;
   publicationAuthority: false;
