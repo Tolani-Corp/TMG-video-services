@@ -16,6 +16,7 @@ import {
 } from "./marketing-storyboard";
 
 const MAX_STORYBOARD_IMAGE_BYTES = 12 * 1024 * 1024;
+const STORYBOARD_DIFFUSION_STEPS = 4 as const;
 
 export interface MarketingStoryboardWorkflowParams {
   schemaVersion: "tmg.marketing-storyboard-request.v1";
@@ -46,13 +47,24 @@ function assertParams(value: unknown): asserts value is MarketingStoryboardWorkf
   if (value.schemaVersion !== "tmg.marketing-storyboard-request.v1") {
     throw new Error("unsupported storyboard workflow request version");
   }
-  for (const key of ["requestId", "tenantId", "creativeBriefKey", "requestedAt"] as const) {
-    if (typeof value[key] !== "string" || !value[key].trim()) {
-      throw new Error(`storyboard workflow parameter ${key} is required`);
-    }
+  const requestId = value.requestId;
+  const tenantId = value.tenantId;
+  const creativeBriefKey = value.creativeBriefKey;
+  const requestedAt = value.requestedAt;
+  if (typeof requestId !== "string" || !requestId.trim()) {
+    throw new Error("storyboard workflow parameter requestId is required");
   }
-  const expectedKey = expectedMarketingCreativeBriefObjectKey(value.tenantId, value.requestId);
-  if (value.creativeBriefKey !== expectedKey) {
+  if (typeof tenantId !== "string" || !tenantId.trim()) {
+    throw new Error("storyboard workflow parameter tenantId is required");
+  }
+  if (typeof creativeBriefKey !== "string" || !creativeBriefKey.trim()) {
+    throw new Error("storyboard workflow parameter creativeBriefKey is required");
+  }
+  if (typeof requestedAt !== "string" || !requestedAt.trim()) {
+    throw new Error("storyboard workflow parameter requestedAt is required");
+  }
+  const expectedKey = expectedMarketingCreativeBriefObjectKey(tenantId, requestId);
+  if (creativeBriefKey !== expectedKey) {
     throw new Error("storyboard creative brief key is outside the canonical request scope");
   }
 }
@@ -123,7 +135,8 @@ function detectImageType(bytes: Uint8Array): {
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const owned = Uint8Array.from(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", owned.buffer);
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
@@ -150,7 +163,9 @@ function frameArtifact(input: {
     model: WORKERS_AI_STORYBOARD_MODEL,
     generationMode: "storyboard_keyframe",
     renderPhase: "preview",
-    seed: input.variant.generation.seed,
+    creativePlanSeed: input.variant.generation.seed,
+    providerSeedApplied: false,
+    diffusionSteps: STORYBOARD_DIFFUSION_STEPS,
     humanReviewRequired: true,
     publicationAuthority: false,
     externalDistributionAuthority: false,
@@ -183,7 +198,9 @@ async function existingFrame(
       metadata.variantId !== input.variant.variantId ||
       metadata.targetProfileId !== input.variant.targetProfile.profileId ||
       metadata.model !== WORKERS_AI_STORYBOARD_MODEL ||
-      metadata.seed !== String(input.variant.generation.seed) ||
+      metadata.creativePlanSeed !== String(input.variant.generation.seed) ||
+      metadata.providerSeedApplied !== "false" ||
+      metadata.diffusionSteps !== String(STORYBOARD_DIFFUSION_STEPS) ||
       metadata.publicationAuthority !== "false" ||
       metadata.humanReviewRequired !== "true"
     ) {
@@ -218,10 +235,9 @@ async function generateFrame(
   if (reused) return reused;
   if (!env.AI) throw new Error("Workers AI binding is not configured for storyboard generation");
 
-  const response: unknown = await env.AI.run(WORKERS_AI_STORYBOARD_MODEL, {
+  const response = await env.AI.run(WORKERS_AI_STORYBOARD_MODEL, {
     prompt: buildMarketingStoryboardPrompt(input.variant),
-    seed: input.variant.generation.seed,
-    steps: 4,
+    steps: STORYBOARD_DIFFUSION_STEPS,
   });
   if (!isRecord(response) || typeof response.image !== "string") {
     throw new Error("Workers AI storyboard renderer did not return an image");
@@ -245,7 +261,9 @@ async function generateFrame(
       variantId: input.variant.variantId,
       targetProfileId: input.variant.targetProfile.profileId,
       model: WORKERS_AI_STORYBOARD_MODEL,
-      seed: String(input.variant.generation.seed),
+      creativePlanSeed: String(input.variant.generation.seed),
+      providerSeedApplied: "false",
+      diffusionSteps: String(STORYBOARD_DIFFUSION_STEPS),
       sha256,
       renderPhase: "preview",
       generationMode: "storyboard_keyframe",
@@ -327,6 +345,8 @@ export class MarketingStoryboardWorkflow extends WorkflowEntrypoint<Env, Marketi
         model: WORKERS_AI_STORYBOARD_MODEL,
         generationMode: "storyboard_keyframe",
         freeNeuronPreview: true,
+        providerSeedApplied: false,
+        diffusionSteps: STORYBOARD_DIFFUSION_STEPS,
       },
       humanReviewRequired: true,
       publicationAuthority: false,
