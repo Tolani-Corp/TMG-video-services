@@ -1,0 +1,96 @@
+name: TMG Intake Credential Readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-intake-credential-readiness
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      READINESS_SHA: ${{ github.sha }}
+      TMG_CONTROL_DB_NAME: tmg-video-control-dev
+      TMG_CONSOLE_ZONE: tolanimediagroup.com
+      TMG_CONSOLE_HOST: console.tolanimediagroup.com
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.READINESS_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify exact-head Quality is green
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${READINESS_SHA}/status" \
+            > exact-head-status.json
+          STATE="$(node -e '
+            const fs=require("fs");
+            const j=JSON.parse(fs.readFileSync("exact-head-status.json","utf8"));
+            const s=(j.statuses||[]).find((x)=>x.context==="Quality / validate");
+            process.stdout.write(s?.state || "missing");
+          ')"
+          [ "${STATE}" = "success" ] || { echo "::error::Exact-head Quality / validate must be green before credential readiness: ${STATE}"; exit 2; }
+
+      - name: Run read-only Cloudflare readiness probes
+        run: node scripts/intake-cloudflare-readiness.mjs
+
+      - name: Upload readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-intake-credential-readiness-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: intake-cloudflare-readiness.json
+
+      - name: Publish readiness success status
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${READINESS_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"TMG Intake Credential Readiness\",\"description\":\"Cloudflare token + D1 + zone + Access + Workers visibility ready\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Publish readiness HOLD status
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${READINESS_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"TMG Intake Credential Readiness\",\"description\":\"HOLD: read-only Cloudflare readiness failed; no mutations attempted\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
