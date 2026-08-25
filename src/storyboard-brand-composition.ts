@@ -1,19 +1,64 @@
-import type { ImageAssetManifest, ImageDerivativeArtifact } from "./image-runtime";
-import type { MarketingCreativeBrief, MarketingCreativeVariant } from "./marketing-creative";
+import type { ImageAssetManifest, ImageDerivativeArtifact, ImagePresetId } from "./image-runtime";
+import type { MarketingCreativeBrief, MarketingCreativeVariant, OutputTargetProfile } from "./marketing-creative";
 
-export const STORYBOARD_BRAND_COMPOSITION_VERSION = "tmg.storyboard-brand-composition.v1.1" as const;
-export const STORYBOARD_MANIFEST_VERSION = "tmg.storyboard-manifest.v1.1" as const;
-export const VIDEO_RENDER_PLAN_VERSION = "tmg.video-render-plan.v1" as const;
-export const STORYBOARD_SHOTS_PER_TARGET = 3 as const;
+export const STORYBOARD_BRAND_SCHEMA_VERSION = "tmg.storyboard-manifest.v1.1" as const;
+export const VIDEO_RENDER_PLAN_SCHEMA_VERSION = "tmg.video-render-plan.v1" as const;
 
-export type StoryboardShotIntent = "hook" | "product_value" | "cta";
+export type StoryboardShotIntent =
+  | "hook"
+  | "problem"
+  | "feature_value"
+  | "product_showcase"
+  | "cta";
 
-export interface StoryboardApprovedAssetRef {
-  artifactId: string;
-  objectKey: string;
-  sha256: string;
-  authorityRef: string;
-  usage: "exact_logo_overlay" | "supporting_visual_reference";
+export interface ImageAssetManifestV1_1 extends Omit<ImageAssetManifest, "schemaVersion"> {
+  schemaVersion: "tmg.image-asset-manifest.v1.1";
+  sourceManifest: {
+    objectKey: string;
+    sha256: string;
+    schemaVersion: "tmg.image-asset-manifest.v1";
+  };
+  composition: {
+    exactApprovedLogoRequired: true;
+    exactProductAssetUseRequiresAuthorizedDerivative: true;
+    focalPoint: { x: number; y: number };
+    logo: {
+      anchor: "bottom_right";
+      widthRatio: number;
+      insetRatio: number;
+    };
+    assets: Array<{
+      artifactId: string;
+      role: "source_image" | "approved_logo" | "platform_derivative";
+      objectKey: string;
+      sha256: string;
+      mimeType: string;
+      authorityRef: string;
+      exactBrandAsset: boolean;
+      reuseAuthority: "authorized";
+      presetId?: ImagePresetId;
+    }>;
+  };
+}
+
+export interface StoryboardCompositionPlan {
+  schemaVersion: "tmg.storyboard-composition-plan.v1";
+  targetProfileId: string;
+  shotId: string;
+  exactLogo: {
+    objectKey: string;
+    sha256: string;
+    widthRatio: number;
+    anchor: "bottom_right";
+  };
+  exactProductAsset?: {
+    objectKey: string;
+    sha256: string;
+    presetId: ImagePresetId;
+    widthRatio: number;
+    anchor: "center";
+  };
+  safeAreaGuidance: string;
 }
 
 export interface StoryboardShotPlan {
@@ -21,124 +66,173 @@ export interface StoryboardShotPlan {
   order: number;
   intent: StoryboardShotIntent;
   durationSeconds: number;
-  prompt: string;
-  targetProfileId: string;
-  target: MarketingCreativeVariant["target"];
-  aspectRatio: MarketingCreativeVariant["targetProfile"]["aspectRatio"];
-  width: number;
-  height: number;
-  approvedAssets: StoryboardApprovedAssetRef[];
-  safeAreaGuidance: string;
+  verifiedCopy: {
+    headline: string;
+    supportingText?: string;
+    callToAction?: string;
+  };
+  fluxPrompt: string;
+  composition: StoryboardCompositionPlan;
 }
 
-export interface StoryboardFrameEvidence {
+export interface StoryboardTargetPlan {
+  variantId: string;
+  targetProfile: OutputTargetProfile;
+  target: MarketingCreativeVariant["target"];
+  creativeAngle: MarketingCreativeVariant["creativeAngle"];
+  shots: StoryboardShotPlan[];
+}
+
+export interface StoryboardGeneratedFrameArtifact {
+  schemaVersion: "tmg.storyboard-generated-frame.v1.1";
+  artifactId: string;
+  variantId: string;
   shotId: string;
-  rawFrame: {
-    objectKey: string;
-    sha256: string;
-    bytes: number;
-    mimeType: "image/jpeg" | "image/png";
-    provider: "cloudflare_workers_ai";
-    model: "@cf/black-forest-labs/flux-1-schnell";
-  };
-  composedFrame: {
-    objectKey: string;
-    sha256: string;
-    bytes: number;
-    mimeType: "image/webp";
-    exactApprovedLogoOverlayApplied: true;
-    approvedLogoSha256: string;
-  };
-}
-
-export interface StoryboardTargetManifest {
   targetProfileId: string;
-  target: MarketingCreativeVariant["target"];
-  durationSeconds: number;
-  aspectRatio: MarketingCreativeVariant["targetProfile"]["aspectRatio"];
-  shots: Array<StoryboardShotPlan & { evidence: StoryboardFrameEvidence }>;
-  titleCard: StoryboardCardSpec;
-  endCard: StoryboardCardSpec;
-}
-
-export interface StoryboardCardSpec {
-  cardId: string;
-  kind: "title" | "end";
-  targetProfileId: string;
-  durationSeconds: number;
-  headline: string;
-  supportingText?: string;
-  callToAction?: string;
-  approvedLogo: StoryboardApprovedAssetRef;
-  backgroundFrameObjectKey: string;
-  compositionMode: "deterministic_review_card";
+  objectKey: string;
+  sha256: string;
+  bytes: number;
+  contentType: "image/jpeg" | "image/png";
+  promptSha256: string;
+  provider: "cloudflare_workers_ai";
+  model: "@cf/black-forest-labs/flux-1-schnell";
+  diffusionSteps: 4;
+  providerSeedApplied: false;
   humanReviewRequired: true;
   publicationAuthority: false;
+  externalDistributionAuthority: false;
 }
 
-export interface StoryboardManifestV11 {
-  schemaVersion: typeof STORYBOARD_MANIFEST_VERSION;
+export interface StoryboardComposedFrameArtifact {
+  schemaVersion: "tmg.storyboard-composed-frame.v1.1";
+  artifactId: string;
+  variantId: string;
+  shotId: string;
+  targetProfileId: string;
+  objectKey: string;
+  sha256: string;
+  bytes: number;
+  contentType: "image/webp";
+  width: number;
+  height: number;
+  generatedFrameSha256: string;
+  approvedLogoSha256: string;
+  approvedProductAssetSha256?: string;
+  exactApprovedLogoOverlayApplied: true;
+  exactApprovedProductAssetApplied: boolean;
+  compositionPlan: StoryboardCompositionPlan;
+  humanReviewRequired: true;
+  publicationAuthority: false;
+  externalDistributionAuthority: false;
+}
+
+export interface StoryboardBrandCardArtifact {
+  schemaVersion: "tmg.storyboard-brand-card.v1.1";
+  artifactId: string;
+  cardType: "title" | "end";
+  variantId: string;
+  targetProfileId: string;
+  objectKey: string;
+  sha256: string;
+  bytes: number;
+  contentType: "image/webp";
+  width: number;
+  height: number;
+  exactApprovedLogoOverlayApplied: true;
+  sourceDerivativeSha256: string;
+  approvedLogoSha256: string;
+  verifiedCopy: {
+    headline: string;
+    supportingText?: string;
+    callToAction?: string;
+  };
+  textRenderedInImage: false;
+  humanReviewRequired: true;
+  publicationAuthority: false;
+  externalDistributionAuthority: false;
+}
+
+export interface StoryboardManifestTarget {
+  variantId: string;
+  targetProfile: OutputTargetProfile;
+  target: MarketingCreativeVariant["target"];
+  creativeAngle: MarketingCreativeVariant["creativeAngle"];
+  shots: Array<StoryboardShotPlan & {
+    generatedFrame: StoryboardGeneratedFrameArtifact;
+    composedFrame: StoryboardComposedFrameArtifact;
+  }>;
+  titleCard: StoryboardBrandCardArtifact;
+  endCard: StoryboardBrandCardArtifact;
+}
+
+export interface StoryboardManifestV1_1 {
+  schemaVersion: typeof STORYBOARD_BRAND_SCHEMA_VERSION;
   requestId: string;
   tenantId: string;
   creativeBriefKey: string;
   imageAssetManifestKey: string;
-  targets: StoryboardTargetManifest[];
-  rights: {
-    evidenceRef: string;
-    imageReuseAuthorized: true;
-    exactLogoOverlayAuthorized: true;
+  enhancedImageAssetManifestKey: string;
+  renderer: {
+    conceptProvider: "cloudflare_workers_ai";
+    conceptModel: "@cf/black-forest-labs/flux-1-schnell";
+    compositionProvider: "cloudflare_images_binding";
+    deterministicExactAssetComposition: true;
   };
-  provenance: {
-    planner: typeof STORYBOARD_BRAND_COMPOSITION_VERSION;
-    generatedImageProvider: "cloudflare_workers_ai";
-    generatedImageModel: "@cf/black-forest-labs/flux-1-schnell";
-    exactCompositionProvider: "cloudflare_images_binding";
-    createdAt: string;
-  };
+  targets: StoryboardManifestTarget[];
   governance: {
     humanReviewRequired: true;
     publicationAuthority: false;
     externalDistributionAuthority: false;
   };
-}
-
-export interface VideoRenderPlanShot {
-  shotId: string;
-  order: number;
-  intent: StoryboardShotIntent;
-  durationSeconds: number;
-  prompt: string;
-  referenceFrameObjectKey: string;
-  referenceFrameSha256: string;
-}
-
-export interface VideoRenderPlanTarget {
-  targetProfileId: string;
-  target: MarketingCreativeVariant["target"];
-  aspectRatio: MarketingCreativeVariant["targetProfile"]["aspectRatio"];
-  durationSeconds: number;
-  shots: VideoRenderPlanShot[];
-  titleCardId: string;
-  endCardId: string;
+  createdAt: string;
 }
 
 export interface VideoRenderPlanV1 {
-  schemaVersion: typeof VIDEO_RENDER_PLAN_VERSION;
+  schemaVersion: typeof VIDEO_RENDER_PLAN_SCHEMA_VERSION;
+  renderPlanId: string;
   requestId: string;
   tenantId: string;
   storyboardManifestKey: string;
-  renderer: {
-    preferredProvider: "pruna/p-video";
-    executionState: "disabled_pending_provider_capacity";
-    storyboardGroundingRequired: true;
+  provider: {
+    id: "pruna/p-video";
+    mode: "paid_preview";
+    activationState: "disabled_until_paid_acceptance";
   };
-  targets: VideoRenderPlanTarget[];
+  targets: Array<{
+    variantId: string;
+    targetProfile: OutputTargetProfile;
+    shots: Array<{
+      shotId: string;
+      order: number;
+      durationSeconds: number;
+      prompt: string;
+      referenceFrameObjectKey: string;
+      referenceFrameSha256: string;
+    }>;
+    titleCard: Pick<StoryboardBrandCardArtifact, "objectKey" | "sha256" | "verifiedCopy">;
+    endCard: Pick<StoryboardBrandCardArtifact, "objectKey" | "sha256" | "verifiedCopy">;
+  }>;
   governance: {
     humanReviewRequired: true;
     publicationAuthority: false;
     externalDistributionAuthority: false;
-    paidProviderExecutionAuthorized: false;
+    providerExecutionAuthorized: false;
   };
+  createdAt: string;
+}
+
+export interface StoryboardBrandReviewPackageV1_1 {
+  schemaVersion: "tmg.storyboard-brand-review-package.v1.1";
+  requestId: string;
+  tenantId: string;
+  storyboardManifestKey: string;
+  enhancedImageAssetManifestKey: string;
+  videoRenderPlanKey: string;
+  targetCount: number;
+  shotCount: number;
+  humanReviewRequired: true;
+  publicationAuthority: false;
+  externalDistributionAuthority: false;
   createdAt: string;
 }
 
@@ -146,242 +240,295 @@ function safeSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 160);
 }
 
-export function storyboardV11Root(tenantId: string, requestId: string): string {
-  return `tenants/${tenantId}/production-requests/${requestId}/storyboard-v1-1`;
+export function storyboardBrandRoot(tenantId: string, requestId: string): string {
+  return `tenants/${tenantId}/production-requests/${requestId}/outputs/marketing/storyboard-brand-v1-1`;
 }
 
-export function storyboardManifestV11Key(tenantId: string, requestId: string): string {
-  return `${storyboardV11Root(tenantId, requestId)}/control/storyboard-manifest-v1.1.json`;
+export function enhancedImageAssetManifestKey(tenantId: string, requestId: string): string {
+  return `tenants/${tenantId}/image-runtime/${requestId}/control/image-asset-manifest-v1.1.json`;
 }
 
-export function videoRenderPlanV1Key(tenantId: string, requestId: string): string {
-  return `${storyboardV11Root(tenantId, requestId)}/control/video-render-plan-v1.json`;
+export function storyboardManifestObjectKey(tenantId: string, requestId: string): string {
+  return `${storyboardBrandRoot(tenantId, requestId)}/control/storyboard-manifest-v1.1.json`;
 }
 
-export function storyboardRawFrameKey(input: {
+export function videoRenderPlanObjectKey(tenantId: string, requestId: string): string {
+  return `${storyboardBrandRoot(tenantId, requestId)}/handoff/video-render-plan-v1.json`;
+}
+
+export function storyboardBrandReviewPackageObjectKey(tenantId: string, requestId: string): string {
+  return `${storyboardBrandRoot(tenantId, requestId)}/review/storyboard-brand-review-package-v1.1.json`;
+}
+
+export function generatedShotFrameObjectKey(input: {
   tenantId: string;
   requestId: string;
-  targetProfileId: string;
+  variantId: string;
   shotId: string;
   extension: "jpg" | "png";
 }): string {
-  return `${storyboardV11Root(input.tenantId, input.requestId)}/${safeSegment(input.targetProfileId)}/shots/${safeSegment(input.shotId)}/raw.${input.extension}`;
+  return `${storyboardBrandRoot(input.tenantId, input.requestId)}/targets/${safeSegment(input.variantId)}/shots/${safeSegment(input.shotId)}/generated.${input.extension}`;
 }
 
-export function storyboardComposedFrameKey(input: {
+export function composedShotFrameObjectKey(input: {
   tenantId: string;
   requestId: string;
-  targetProfileId: string;
+  variantId: string;
   shotId: string;
 }): string {
-  return `${storyboardV11Root(input.tenantId, input.requestId)}/${safeSegment(input.targetProfileId)}/shots/${safeSegment(input.shotId)}/composed.webp`;
+  return `${storyboardBrandRoot(input.tenantId, input.requestId)}/targets/${safeSegment(input.variantId)}/shots/${safeSegment(input.shotId)}/composed.webp`;
 }
 
-function allocateShotDurations(totalSeconds: number): [number, number, number] {
-  if (!Number.isFinite(totalSeconds) || totalSeconds < 3) {
-    throw new Error("storyboard target duration must be at least three seconds");
-  }
-  const hook = Math.max(1, Math.round(totalSeconds * 0.28));
-  const cta = Math.max(1, Math.round(totalSeconds * 0.24));
-  const value = Math.max(1, totalSeconds - hook - cta);
-  const normalizedTotal = hook + value + cta;
-  if (normalizedTotal !== totalSeconds) {
-    return [hook, Math.max(1, value + (totalSeconds - normalizedTotal)), cta];
-  }
-  return [hook, value, cta];
+export function brandCardObjectKey(input: {
+  tenantId: string;
+  requestId: string;
+  variantId: string;
+  cardType: "title" | "end";
+}): string {
+  return `${storyboardBrandRoot(input.tenantId, input.requestId)}/targets/${safeSegment(input.variantId)}/cards/${input.cardType}.webp`;
 }
 
-function approvedLogoRef(manifest: ImageAssetManifest): StoryboardApprovedAssetRef {
+function derivativeForVariant(
+  manifest: Pick<ImageAssetManifest, "derivatives">,
+  variant: MarketingCreativeVariant,
+): ImageDerivativeArtifact {
+  const preferred: ImagePresetId = variant.target.platform === "tiktok"
+    ? "tiktok.cover.v1"
+    : variant.target.platform === "youtube"
+      ? "youtube.thumbnail.v1"
+      : variant.target.platform === "instagram"
+        ? "instagram.square.v1"
+        : "web.hero.v1";
+  const derivative = manifest.derivatives.find((candidate) => candidate.presetId === preferred);
+  if (!derivative) throw new Error(`approved image derivative ${preferred} is required for storyboard composition`);
+  return derivative;
+}
+
+export function enhanceImageAssetManifest(input: {
+  manifest: ImageAssetManifest;
+  sourceManifestKey: string;
+  sourceManifestSha256: string;
+}): ImageAssetManifestV1_1 {
+  if (input.manifest.schemaVersion !== "tmg.image-asset-manifest.v1") {
+    throw new Error("unsupported source ImageAssetManifest version");
+  }
+  if (
+    input.manifest.rights.sourceReuseAuthorized !== true ||
+    input.manifest.rights.logoOverlayAuthorized !== true ||
+    input.manifest.rights.evidenceState !== "verified"
+  ) {
+    throw new Error("ImageAssetManifest is not composition-authorized");
+  }
   return {
-    artifactId: manifest.approvedLogo.artifactId,
-    objectKey: manifest.approvedLogo.objectKey,
-    sha256: manifest.approvedLogo.sha256,
-    authorityRef: manifest.approvedLogo.authorityRef,
-    usage: "exact_logo_overlay",
+    ...input.manifest,
+    schemaVersion: "tmg.image-asset-manifest.v1.1",
+    sourceManifest: {
+      objectKey: input.sourceManifestKey,
+      sha256: input.sourceManifestSha256,
+      schemaVersion: "tmg.image-asset-manifest.v1",
+    },
+    composition: {
+      exactApprovedLogoRequired: true,
+      exactProductAssetUseRequiresAuthorizedDerivative: true,
+      focalPoint: { x: 0.5, y: 0.5 },
+      logo: {
+        anchor: "bottom_right",
+        widthRatio: 0.18,
+        insetRatio: 0.04,
+      },
+      assets: [
+        {
+          artifactId: input.manifest.source.artifactId,
+          role: "source_image",
+          objectKey: input.manifest.source.objectKey,
+          sha256: input.manifest.source.sha256,
+          mimeType: input.manifest.source.mimeType,
+          authorityRef: input.manifest.source.authorityRef,
+          exactBrandAsset: false,
+          reuseAuthority: "authorized",
+        },
+        {
+          artifactId: input.manifest.approvedLogo.artifactId,
+          role: "approved_logo",
+          objectKey: input.manifest.approvedLogo.objectKey,
+          sha256: input.manifest.approvedLogo.sha256,
+          mimeType: input.manifest.approvedLogo.mimeType,
+          authorityRef: input.manifest.approvedLogo.authorityRef,
+          exactBrandAsset: true,
+          reuseAuthority: "authorized",
+        },
+        ...input.manifest.derivatives.map((derivative) => ({
+          artifactId: derivative.artifactId,
+          role: "platform_derivative" as const,
+          objectKey: derivative.objectKey,
+          sha256: derivative.sha256,
+          mimeType: derivative.mimeType,
+          authorityRef: input.manifest.rights.evidenceRef,
+          exactBrandAsset: true,
+          reuseAuthority: "authorized" as const,
+          presetId: derivative.presetId,
+        })),
+      ],
+    },
   };
 }
 
-function supportingDerivativeForVariant(
-  manifest: ImageAssetManifest,
-  variant: MarketingCreativeVariant,
-): ImageDerivativeArtifact | undefined {
-  const platform = variant.target.platform === "website" || variant.target.platform === "web_app"
-    ? "website"
-    : variant.target.platform;
-  return manifest.derivatives.find((derivative) => derivative.platform === platform);
+function shotIntents(variant: MarketingCreativeVariant): StoryboardShotIntent[] {
+  if (variant.target.platform === "youtube" && /short/i.test(variant.target.surface)) {
+    return ["hook", "problem", "product_showcase", "cta"];
+  }
+  if (variant.target.platform === "website" || variant.target.platform === "web_app") {
+    return ["product_showcase", "feature_value", "cta"];
+  }
+  return ["hook", "product_showcase", "cta"];
 }
 
-function buildShotPrompt(
+function durations(totalSeconds: number, intents: StoryboardShotIntent[]): number[] {
+  if (intents.length === 4) {
+    const each = Math.floor((totalSeconds / 4) * 10) / 10;
+    return [each, each, each, Math.round((totalSeconds - each * 3) * 10) / 10];
+  }
+  const first = Math.round(totalSeconds * 0.28 * 10) / 10;
+  const middle = Math.round(totalSeconds * 0.44 * 10) / 10;
+  return [first, middle, Math.round((totalSeconds - first - middle) * 10) / 10];
+}
+
+function verifiedCopy(
+  brief: MarketingCreativeBrief,
   variant: MarketingCreativeVariant,
   intent: StoryboardShotIntent,
-  supportingDerivative?: ImageDerivativeArtifact,
-): string {
-  const intentInstruction: Record<StoryboardShotIntent, string> = {
-    hook: `Create an immediate visual hook that supports this verified message: ${variant.hook}`,
-    product_value: `Create a product-value scene supporting this verified proposition: ${variant.valueProposition}`,
-    cta: `Create a restrained closing scene that leaves clean negative space for the governed CTA: ${variant.callToAction}`,
-  };
+): StoryboardShotPlan["verifiedCopy"] {
+  if (intent === "hook") return { headline: variant.hook };
+  if (intent === "problem") return { headline: brief.objective, supportingText: variant.hook };
+  if (intent === "feature_value" || intent === "product_showcase") {
+    return { headline: variant.valueProposition, supportingText: variant.hook };
+  }
+  return { headline: variant.callToAction, callToAction: variant.callToAction };
+}
+
+function fluxPrompt(input: {
+  variant: MarketingCreativeVariant;
+  intent: StoryboardShotIntent;
+  copy: StoryboardShotPlan["verifiedCopy"];
+}): string {
+  const colors = input.variant.visualBranding.colors.slice(0, 5);
   return [
-    `Create one cinematic storyboard shot for ${variant.target.platform} ${variant.target.surface}, ${variant.targetProfile.aspectRatio}.`,
-    intentInstruction[intent],
-    variant.visualBranding.brandName ? `Brand context: ${variant.visualBranding.brandName}.` : "",
-    variant.visualBranding.colors.length ? `Palette guidance: ${variant.visualBranding.colors.slice(0, 5).join(", ")}.` : "",
-    variant.targetProfile.safeAreaGuidance,
-    supportingDerivative ? "A separately rights-cleared product visual exists and will be composited deterministically after generation; do not recreate or imitate it." : "",
-    "Do not render typography, captions, watermarks, logos, third-party marks, UI chrome, screenshots, or exact discovered assets.",
-    "Do not invent awards, customer counts, guarantees, prices, testimonials, endorsements, performance claims, or product capabilities.",
-    "Use a polished commercial composition, realistic lighting, clear subject separation, and adequate negative space for later deterministic brand composition.",
+    `Create one polished cinematic storyboard concept frame for the ${input.intent.replace(/_/g, " ")} shot of a ${input.variant.targetProfile.aspectRatio} ${input.variant.target.platform} ${input.variant.target.surface} campaign.`,
+    `Verified message intent: ${input.copy.headline}.`,
+    input.copy.supportingText ? `Supporting verified message: ${input.copy.supportingText}.` : "",
+    input.variant.visualBranding.brandName ? `Brand context: ${input.variant.visualBranding.brandName}.` : "",
+    colors.length > 0 ? `Use this palette only as visual guidance: ${colors.join(", ")}.` : "",
+    input.variant.targetProfile.safeAreaGuidance,
+    "Concept scene only. Do not render typography, exact logos, exact product screenshots, third-party marks, watermarks, or discovered assets.",
+    "Do not invent awards, customer counts, guarantees, prices, testimonials, endorsements, or performance claims.",
+    "Leave clean negative space for later deterministic rights-cleared brand composition.",
   ].filter(Boolean).join(" ");
 }
 
-export function assertAcceptedImageAssetManifest(
-  manifest: ImageAssetManifest,
-  tenantId: string,
-): void {
-  if (manifest.schemaVersion !== "tmg.image-asset-manifest.v1") {
-    throw new Error("unsupported ImageAssetManifest version for storyboard composition");
-  }
-  if (manifest.tenantId !== tenantId) {
-    throw new Error("ImageAssetManifest tenant does not match storyboard tenant");
+export function compileStoryboardTargetPlans(input: {
+  brief: MarketingCreativeBrief;
+  imageManifest: ImageAssetManifestV1_1;
+}): StoryboardTargetPlan[] {
+  if (!input.brief.contextQuality.generationEligible) {
+    throw new Error("creative brief is not eligible for storyboard generation");
   }
   if (
-    manifest.rights.evidenceState !== "verified" ||
-    manifest.rights.purpose !== "marketing_creative" ||
-    manifest.rights.sourceReuseAuthorized !== true ||
-    manifest.rights.logoOverlayAuthorized !== true
+    input.brief.humanReviewRequired !== true ||
+    input.brief.publicationAuthority !== false ||
+    input.brief.externalDistributionAuthority !== false
   ) {
-    throw new Error("ImageAssetManifest does not grant required marketing reuse and exact-logo authority");
+    throw new Error("creative brief governance is incompatible with storyboard composition");
   }
-  if (
-    manifest.governance.humanReviewRequired !== true ||
-    manifest.governance.publicationAuthority !== false ||
-    manifest.governance.externalDistributionAuthority !== false
-  ) {
-    throw new Error("ImageAssetManifest governance is incompatible with storyboard review-only processing");
-  }
-  if (!/^[a-f0-9]{64}$/.test(manifest.approvedLogo.sha256)) {
-    throw new Error("approved logo evidence is missing a valid SHA-256");
-  }
-}
-
-export function buildStoryboardShotPlans(
-  brief: MarketingCreativeBrief,
-  imageManifest: ImageAssetManifest,
-): Map<string, StoryboardShotPlan[]> {
-  assertAcceptedImageAssetManifest(imageManifest, brief.tenantId);
-  const result = new Map<string, StoryboardShotPlan[]>();
-  for (const variant of brief.variants) {
-    const [hookSeconds, valueSeconds, ctaSeconds] = allocateShotDurations(variant.targetProfile.durationSeconds);
-    const supportingDerivative = supportingDerivativeForVariant(imageManifest, variant);
-    const supportingAsset = supportingDerivative ? {
-      artifactId: supportingDerivative.artifactId,
-      objectKey: supportingDerivative.objectKey,
-      sha256: supportingDerivative.sha256,
-      authorityRef: imageManifest.rights.evidenceRef,
-      usage: "supporting_visual_reference" as const,
-    } : undefined;
-    const logo = approvedLogoRef(imageManifest);
-    const entries: Array<[StoryboardShotIntent, number]> = [
-      ["hook", hookSeconds],
-      ["product_value", valueSeconds],
-      ["cta", ctaSeconds],
-    ];
-    const plans = entries.map(([intent, durationSeconds], index) => ({
-      shotId: `${safeSegment(variant.variantId)}-shot-${index + 1}-${intent}`,
-      order: index + 1,
-      intent,
-      durationSeconds,
-      prompt: buildShotPrompt(variant, intent, supportingDerivative),
-      targetProfileId: variant.targetProfile.profileId,
+  return input.brief.variants.map((variant) => {
+    const derivative = derivativeForVariant(input.imageManifest, variant);
+    const intents = shotIntents(variant);
+    const shotDurations = durations(variant.targetProfile.durationSeconds, intents);
+    return {
+      variantId: variant.variantId,
+      targetProfile: variant.targetProfile,
       target: variant.target,
-      aspectRatio: variant.targetProfile.aspectRatio,
-      width: variant.targetProfile.width,
-      height: variant.targetProfile.height,
-      approvedAssets: [logo, ...(supportingAsset ? [supportingAsset] : [])],
-      safeAreaGuidance: variant.targetProfile.safeAreaGuidance,
-    }));
-    result.set(variant.targetProfile.profileId, plans);
-  }
-  return result;
+      creativeAngle: variant.creativeAngle,
+      shots: intents.map((intent, index) => {
+        const copy = verifiedCopy(input.brief, variant, intent);
+        const useExactProductAsset = intent === "product_showcase" || intent === "feature_value";
+        const shotId = `${String(index + 1).padStart(2, "0")}-${intent}`;
+        return {
+          shotId,
+          order: index + 1,
+          intent,
+          durationSeconds: shotDurations[index] ?? 1,
+          verifiedCopy: copy,
+          fluxPrompt: fluxPrompt({ variant, intent, copy }),
+          composition: {
+            schemaVersion: "tmg.storyboard-composition-plan.v1",
+            targetProfileId: variant.targetProfile.profileId,
+            shotId,
+            exactLogo: {
+              objectKey: input.imageManifest.approvedLogo.objectKey,
+              sha256: input.imageManifest.approvedLogo.sha256,
+              widthRatio: intent === "cta" ? 0.28 : input.imageManifest.composition.logo.widthRatio,
+              anchor: "bottom_right",
+            },
+            ...(useExactProductAsset ? {
+              exactProductAsset: {
+                objectKey: derivative.objectKey,
+                sha256: derivative.sha256,
+                presetId: derivative.presetId,
+                widthRatio: 0.46,
+                anchor: "center" as const,
+              },
+            } : {}),
+            safeAreaGuidance: variant.targetProfile.safeAreaGuidance,
+          },
+        };
+      }),
+    };
+  });
 }
 
-export function buildStoryboardCardSpecs(input: {
-  variant: MarketingCreativeVariant;
-  firstComposedFrameKey: string;
-  lastComposedFrameKey: string;
-  imageManifest: ImageAssetManifest;
-}): { titleCard: StoryboardCardSpec; endCard: StoryboardCardSpec } {
-  const logo = approvedLogoRef(input.imageManifest);
-  return {
-    titleCard: {
-      cardId: `${safeSegment(input.variant.variantId)}-title-card`,
-      kind: "title",
-      targetProfileId: input.variant.targetProfile.profileId,
-      durationSeconds: 1,
-      headline: input.variant.hook,
-      supportingText: input.variant.valueProposition,
-      approvedLogo: logo,
-      backgroundFrameObjectKey: input.firstComposedFrameKey,
-      compositionMode: "deterministic_review_card",
-      humanReviewRequired: true,
-      publicationAuthority: false,
-    },
-    endCard: {
-      cardId: `${safeSegment(input.variant.variantId)}-end-card`,
-      kind: "end",
-      targetProfileId: input.variant.targetProfile.profileId,
-      durationSeconds: 1,
-      headline: input.variant.valueProposition,
-      callToAction: input.variant.callToAction,
-      approvedLogo: logo,
-      backgroundFrameObjectKey: input.lastComposedFrameKey,
-      compositionMode: "deterministic_review_card",
-      humanReviewRequired: true,
-      publicationAuthority: false,
-    },
-  };
-}
-
-export function buildVideoRenderPlan(input: {
-  requestId: string;
-  tenantId: string;
+export function compileVideoRenderPlan(input: {
+  manifest: StoryboardManifestV1_1;
   storyboardManifestKey: string;
-  manifest: StoryboardManifestV11;
-  createdAt: string;
 }): VideoRenderPlanV1 {
   return {
-    schemaVersion: VIDEO_RENDER_PLAN_VERSION,
-    requestId: input.requestId,
-    tenantId: input.tenantId,
+    schemaVersion: VIDEO_RENDER_PLAN_SCHEMA_VERSION,
+    renderPlanId: `video-plan-${input.manifest.requestId}`,
+    requestId: input.manifest.requestId,
+    tenantId: input.manifest.tenantId,
     storyboardManifestKey: input.storyboardManifestKey,
-    renderer: {
-      preferredProvider: "pruna/p-video",
-      executionState: "disabled_pending_provider_capacity",
-      storyboardGroundingRequired: true,
+    provider: {
+      id: "pruna/p-video",
+      mode: "paid_preview",
+      activationState: "disabled_until_paid_acceptance",
     },
     targets: input.manifest.targets.map((target) => ({
-      targetProfileId: target.targetProfileId,
-      target: target.target,
-      aspectRatio: target.aspectRatio,
-      durationSeconds: target.durationSeconds,
+      variantId: target.variantId,
+      targetProfile: target.targetProfile,
       shots: target.shots.map((shot) => ({
         shotId: shot.shotId,
         order: shot.order,
-        intent: shot.intent,
         durationSeconds: shot.durationSeconds,
-        prompt: shot.prompt,
-        referenceFrameObjectKey: shot.evidence.composedFrame.objectKey,
-        referenceFrameSha256: shot.evidence.composedFrame.sha256,
+        prompt: shot.fluxPrompt,
+        referenceFrameObjectKey: shot.composedFrame.objectKey,
+        referenceFrameSha256: shot.composedFrame.sha256,
       })),
-      titleCardId: target.titleCard.cardId,
-      endCardId: target.endCard.cardId,
+      titleCard: {
+        objectKey: target.titleCard.objectKey,
+        sha256: target.titleCard.sha256,
+        verifiedCopy: target.titleCard.verifiedCopy,
+      },
+      endCard: {
+        objectKey: target.endCard.objectKey,
+        sha256: target.endCard.sha256,
+        verifiedCopy: target.endCard.verifiedCopy,
+      },
     })),
     governance: {
       humanReviewRequired: true,
       publicationAuthority: false,
       externalDistributionAuthority: false,
-      paidProviderExecutionAuthorized: false,
+      providerExecutionAuthorized: false,
     },
-    createdAt: input.createdAt,
+    createdAt: input.manifest.createdAt,
   };
 }

@@ -1,66 +1,81 @@
 import { describe, expect, it } from "vitest";
 import type { ImageAssetManifest } from "../src/image-runtime";
-import type { MarketingCreativeBrief } from "../src/marketing-creative";
+import type { MarketingCreativeBrief, MarketingCreativeVariant, OutputTargetProfile } from "../src/marketing-creative";
 import {
-  buildStoryboardCardSpecs,
-  buildStoryboardShotPlans,
-  buildVideoRenderPlan,
-  storyboardComposedFrameKey,
-  storyboardManifestV11Key,
-  type StoryboardManifestV11,
+  compileStoryboardTargetPlans,
+  compileVideoRenderPlan,
+  enhanceImageAssetManifest,
+  storyboardManifestObjectKey,
+  type StoryboardManifestV1_1,
 } from "../src/storyboard-brand-composition";
+
+function derivative(
+  presetId: ImageAssetManifest["derivatives"][number]["presetId"],
+  platform: ImageAssetManifest["derivatives"][number]["platform"],
+  width: number,
+  height: number,
+  aspectRatio: ImageAssetManifest["derivatives"][number]["aspectRatio"],
+  index: number,
+): ImageAssetManifest["derivatives"][number] {
+  return {
+    artifactId: `derivative-${index}`,
+    presetId,
+    platform,
+    objectKey: `tenants/acme/image-runtime/request-1/derivatives/${presetId}.webp`,
+    sha256: String(index + 2).repeat(64),
+    bytes: 2000 + index,
+    mimeType: "image/webp",
+    width,
+    height,
+    aspectRatio,
+    sourceSha256: "1".repeat(64),
+    logoSha256: "2".repeat(64),
+    exactApprovedLogoOverlayApplied: true,
+    humanReviewRequired: true,
+    publicationAuthority: false,
+  };
+}
 
 const imageManifest: ImageAssetManifest = {
   schemaVersion: "tmg.image-asset-manifest.v1",
-  requestId: "brand-assets-1",
-  tenantId: "storyboard_acceptance",
+  requestId: "request-1",
+  tenantId: "acme",
   source: {
     artifactId: "source-1",
-    objectKey: "tenants/storyboard_acceptance/image-runtime/brand-assets-1/inputs/source.png",
-    sha256: "a".repeat(64),
-    bytes: 100,
+    objectKey: "tenants/acme/image-runtime/request-1/inputs/source.png",
+    sha256: "1".repeat(64),
+    bytes: 4096,
     mimeType: "image/png",
-    authorityRef: "fixture://source",
-    inspection: { format: "image/png", width: 64, height: 64, fileSize: 100 },
+    authorityRef: "rights://source",
+    inspection: { format: "image/png", width: 1200, height: 800, fileSize: 4096 },
   },
   approvedLogo: {
     artifactId: "logo-1",
-    objectKey: "tenants/storyboard_acceptance/image-runtime/brand-assets-1/inputs/logo.png",
-    sha256: "b".repeat(64),
-    bytes: 80,
+    objectKey: "tenants/acme/image-runtime/request-1/inputs/logo.png",
+    sha256: "2".repeat(64),
+    bytes: 1024,
     mimeType: "image/png",
-    authorityRef: "fixture://logo",
-    inspection: { format: "image/png", width: 32, height: 32, fileSize: 80 },
+    authorityRef: "rights://logo",
+    inspection: { format: "image/png", width: 320, height: 96, fileSize: 1024 },
   },
   rights: {
-    evidenceRef: "rights://storyboard/brand-assets-1",
+    evidenceRef: "rights://campaign",
     evidenceState: "verified",
     purpose: "marketing_creative",
     sourceReuseAuthorized: true,
     logoOverlayAuthorized: true,
   },
-  derivatives: [{
-    artifactId: "brand-assets-1-tiktok.cover.v1",
-    presetId: "tiktok.cover.v1",
-    platform: "tiktok",
-    objectKey: "tenants/storyboard_acceptance/image-runtime/brand-assets-1/derivatives/tiktok.cover.v1.webp",
-    sha256: "c".repeat(64),
-    bytes: 120,
-    mimeType: "image/webp",
-    width: 1080,
-    height: 1920,
-    aspectRatio: "9:16",
-    sourceSha256: "a".repeat(64),
-    logoSha256: "b".repeat(64),
-    exactApprovedLogoOverlayApplied: true,
-    humanReviewRequired: true,
-    publicationAuthority: false,
-  }],
+  derivatives: [
+    derivative("tiktok.cover.v1", "tiktok", 1080, 1920, "9:16", 1),
+    derivative("youtube.thumbnail.v1", "youtube", 1280, 720, "16:9", 2),
+    derivative("instagram.square.v1", "instagram", 1080, 1080, "1:1", 3),
+    derivative("web.hero.v1", "website", 1600, 900, "16:9", 4),
+  ],
   provenance: {
     processor: "cloudflare_images_binding",
     sourceStorage: "cloudflare_r2",
     transformationVersion: "tmg.image-runtime.v1",
-    processedAt: "2026-08-25T00:00:00.000Z",
+    processedAt: "2026-08-24T20:00:00.000Z",
   },
   governance: {
     humanReviewRequired: true,
@@ -69,160 +84,163 @@ const imageManifest: ImageAssetManifest = {
   },
 };
 
-const brief: MarketingCreativeBrief = {
-  schemaVersion: "tmg.marketing-creative-brief.v1",
-  requestId: "request-1",
-  tenantId: "storyboard_acceptance",
-  title: "TMG Launchpad",
-  objective: "Show governed campaign production",
-  contextQuality: { score: 90, generationEligible: true, warnings: [] },
-  variants: [{
-    variantId: "01-tiktok.organic.v1",
-    target: { platform: "tiktok", surface: "organic", usage: "organic" },
+function variant(input: {
+  variantId: string;
+  platform: MarketingCreativeVariant["target"]["platform"];
+  surface: string;
+  usage: MarketingCreativeVariant["target"]["usage"];
+  profileId: string;
+  aspectRatio: OutputTargetProfile["aspectRatio"];
+  width: number;
+  height: number;
+  durationSeconds: number;
+  conceptBias: OutputTargetProfile["conceptBias"];
+}): MarketingCreativeVariant {
+  return {
+    variantId: input.variantId,
+    target: { platform: input.platform, surface: input.surface, usage: input.usage },
     targetProfile: {
-      profileId: "tiktok.organic.v1",
-      platform: "tiktok",
-      surface: "organic",
-      aspectRatio: "9:16",
-      width: 1080,
-      height: 1920,
-      durationSeconds: 7,
-      safeAreaGuidance: "Keep primary subject centered inside safe margins.",
-      conceptBias: "hook_first",
+      profileId: input.profileId,
+      platform: input.platform,
+      surface: input.surface,
+      aspectRatio: input.aspectRatio,
+      width: input.width,
+      height: input.height,
+      durationSeconds: input.durationSeconds,
+      safeAreaGuidance: "Keep critical content inside conservative safe areas.",
+      conceptBias: input.conceptBias,
     },
-    creativeAngle: "hook_first",
-    hook: "Turn product context into campaign-ready media",
-    valueProposition: "One governed brief, multiple campaign formats",
+    creativeAngle: input.conceptBias,
+    hook: `Verified hook for ${input.profileId}`,
+    valueProposition: `Verified value for ${input.profileId}`,
     callToAction: "Learn more",
-    script: "Review-only synthetic script",
-    videoPrompt: "Paid provider prompt remains gated",
+    script: "Verified hook. Verified value. Learn more.",
+    videoPrompt: "unused by storyboard planning",
     generation: {
       mode: "text_to_video",
       phase: "preview",
       resolution: "720p",
-      durationSeconds: 7,
-      aspectRatio: "9:16",
+      durationSeconds: input.durationSeconds,
+      aspectRatio: input.aspectRatio,
       draft: true,
-      saveAudio: true,
+      saveAudio: input.platform !== "website",
       seed: 42,
       safetyFilterEnabled: true,
     },
     visualBranding: {
-      brandName: "TMG Launchpad",
+      brandName: "Acme",
       colors: ["#111827", "#22d3ee"],
-      exactAssetReuseAllowed: false,
+      exactAssetReuseAllowed: true,
     },
-  }],
+  };
+}
+
+const brief: MarketingCreativeBrief = {
+  schemaVersion: "tmg.marketing-creative-brief.v1",
+  requestId: "request-1",
+  tenantId: "acme",
+  title: "Acme launch",
+  objective: "Show how approved product context becomes campaign-ready media",
+  contextQuality: { score: 90, generationEligible: true, warnings: [] },
+  variants: [
+    variant({
+      variantId: "01-tiktok.organic.v1",
+      platform: "tiktok",
+      surface: "organic",
+      usage: "organic",
+      profileId: "tiktok.organic.v1",
+      aspectRatio: "9:16",
+      width: 1080,
+      height: 1920,
+      durationSeconds: 7,
+      conceptBias: "hook_first",
+    }),
+    variant({
+      variantId: "02-youtube.short.v1",
+      platform: "youtube",
+      surface: "shorts",
+      usage: "organic",
+      profileId: "youtube.short.v1",
+      aspectRatio: "9:16",
+      width: 1080,
+      height: 1920,
+      durationSeconds: 8,
+      conceptBias: "hook_first",
+    }),
+    variant({
+      variantId: "03-web.hero.v1",
+      platform: "website",
+      surface: "hero",
+      usage: "owned_media",
+      profileId: "web.hero.v1",
+      aspectRatio: "16:9",
+      width: 1920,
+      height: 1080,
+      durationSeconds: 6,
+      conceptBias: "product_value",
+    }),
+  ],
   humanReviewRequired: true,
   publicationAuthority: false,
   externalDistributionAuthority: false,
-  compiledAt: "2026-08-25T00:00:00.000Z",
+  compiledAt: "2026-08-24T20:00:00.000Z",
 };
 
 describe("TMG Storyboard & Brand Composition v1.1", () => {
-  it("plans three governed shots whose durations exactly match the target", () => {
-    const plans = buildStoryboardShotPlans(brief, imageManifest).get("tiktok.organic.v1");
-    expect(plans).toHaveLength(3);
-    expect(plans?.map((shot) => shot.intent)).toEqual(["hook", "product_value", "cta"]);
-    expect(plans?.reduce((sum, shot) => sum + shot.durationSeconds, 0)).toBe(7);
-    expect(plans?.every((shot) => shot.approvedAssets.some((asset) => asset.usage === "exact_logo_overlay"))).toBe(true);
-    expect(plans?.[0]?.prompt).toContain("do not recreate or imitate it");
-    expect(plans?.[0]?.prompt).toContain("Do not invent awards");
+  it("projects a verified ImageAssetManifest into a composition-ready contract", () => {
+    const enhanced = enhanceImageAssetManifest({
+      manifest: imageManifest,
+      sourceManifestKey: "tenants/acme/image-runtime/request-1/control/image-asset-manifest-v1.json",
+      sourceManifestSha256: "a".repeat(64),
+    });
+    expect(enhanced.schemaVersion).toBe("tmg.image-asset-manifest.v1.1");
+    expect(enhanced.composition.exactApprovedLogoRequired).toBe(true);
+    expect(enhanced.composition.assets.filter((asset) => asset.role === "platform_derivative")).toHaveLength(4);
+    expect(enhanced.governance.publicationAuthority).toBe(false);
   });
 
-  it("creates deterministic title/end-card specs from composed frames", () => {
-    const variant = brief.variants[0]!;
-    const cards = buildStoryboardCardSpecs({
-      variant,
-      firstComposedFrameKey: "first.webp",
-      lastComposedFrameKey: "last.webp",
-      imageManifest,
+  it("creates multi-shot plans with post-FLUX exact brand composition", () => {
+    const enhanced = enhanceImageAssetManifest({
+      manifest: imageManifest,
+      sourceManifestKey: "tenants/acme/image-runtime/request-1/control/image-asset-manifest-v1.json",
+      sourceManifestSha256: "a".repeat(64),
     });
-    expect(cards.titleCard.kind).toBe("title");
-    expect(cards.endCard.kind).toBe("end");
-    expect(cards.titleCard.approvedLogo.sha256).toBe("b".repeat(64));
-    expect(cards.endCard.callToAction).toBe("Learn more");
-    expect(cards.endCard.publicationAuthority).toBe(false);
+    const plans = compileStoryboardTargetPlans({ brief, imageManifest: enhanced });
+    expect(plans.map((plan) => plan.shots.length)).toEqual([3, 4, 3]);
+    expect(plans[0]?.shots.map((shot) => shot.intent)).toEqual(["hook", "product_showcase", "cta"]);
+    expect(plans[1]?.shots.map((shot) => shot.intent)).toEqual(["hook", "problem", "product_showcase", "cta"]);
+    expect(plans[0]?.shots[0]?.composition.exactProductAsset).toBeUndefined();
+    expect(plans[0]?.shots[1]?.composition.exactProductAsset?.presetId).toBe("tiktok.cover.v1");
+    expect(plans[0]?.shots.every((shot) => shot.composition.exactLogo.sha256 === "2".repeat(64))).toBe(true);
+    expect(plans[0]?.shots[0]?.fluxPrompt).toContain("Do not render typography, exact logos, exact product screenshots");
+    expect(plans.flatMap((plan) => plan.shots).every((shot) => shot.durationSeconds > 0)).toBe(true);
   });
 
-  it("hands an immutable storyboard to P-Video without authorizing paid execution", () => {
-    const variant = brief.variants[0]!;
-    const plan = buildStoryboardShotPlans(brief, imageManifest).get("tiktok.organic.v1")![0]!;
-    const composedKey = storyboardComposedFrameKey({
-      tenantId: brief.tenantId,
-      requestId: brief.requestId,
-      targetProfileId: variant.targetProfile.profileId,
-      shotId: plan.shotId,
-    });
-    const cards = buildStoryboardCardSpecs({
-      variant,
-      firstComposedFrameKey: composedKey,
-      lastComposedFrameKey: composedKey,
-      imageManifest,
-    });
-    const manifest: StoryboardManifestV11 = {
+  it("creates a P-Video handoff with provider execution disabled", () => {
+    const manifest: StoryboardManifestV1_1 = {
       schemaVersion: "tmg.storyboard-manifest.v1.1",
-      requestId: brief.requestId,
-      tenantId: brief.tenantId,
-      creativeBriefKey: `tenants/${brief.tenantId}/production-requests/${brief.requestId}/marketing/creative-brief-v1.json`,
-      imageAssetManifestKey: `tenants/${brief.tenantId}/image-runtime/brand-assets-1/control/image-asset-manifest-v1.json`,
-      targets: [{
-        targetProfileId: variant.targetProfile.profileId,
-        target: variant.target,
-        durationSeconds: variant.targetProfile.durationSeconds,
-        aspectRatio: variant.targetProfile.aspectRatio,
-        shots: [{
-          ...plan,
-          evidence: {
-            shotId: plan.shotId,
-            rawFrame: {
-              objectKey: "raw.jpg",
-              sha256: "d".repeat(64),
-              bytes: 100,
-              mimeType: "image/jpeg",
-              provider: "cloudflare_workers_ai",
-              model: "@cf/black-forest-labs/flux-1-schnell",
-            },
-            composedFrame: {
-              objectKey: composedKey,
-              sha256: "e".repeat(64),
-              bytes: 100,
-              mimeType: "image/webp",
-              exactApprovedLogoOverlayApplied: true,
-              approvedLogoSha256: "b".repeat(64),
-            },
-          },
-        }],
-        ...cards,
-      }],
-      rights: {
-        evidenceRef: imageManifest.rights.evidenceRef,
-        imageReuseAuthorized: true,
-        exactLogoOverlayAuthorized: true,
+      requestId: "request-1",
+      tenantId: "acme",
+      creativeBriefKey: "tenants/acme/production-requests/request-1/marketing/creative-brief-v1.json",
+      imageAssetManifestKey: "tenants/acme/image-runtime/request-1/control/image-asset-manifest-v1.json",
+      enhancedImageAssetManifestKey: "tenants/acme/image-runtime/request-1/control/image-asset-manifest-v1.1.json",
+      renderer: {
+        conceptProvider: "cloudflare_workers_ai",
+        conceptModel: "@cf/black-forest-labs/flux-1-schnell",
+        compositionProvider: "cloudflare_images_binding",
+        deterministicExactAssetComposition: true,
       },
-      provenance: {
-        planner: "tmg.storyboard-brand-composition.v1.1",
-        generatedImageProvider: "cloudflare_workers_ai",
-        generatedImageModel: "@cf/black-forest-labs/flux-1-schnell",
-        exactCompositionProvider: "cloudflare_images_binding",
-        createdAt: "2026-08-25T00:00:00.000Z",
-      },
-      governance: {
-        humanReviewRequired: true,
-        publicationAuthority: false,
-        externalDistributionAuthority: false,
-      },
+      targets: [],
+      governance: { humanReviewRequired: true, publicationAuthority: false, externalDistributionAuthority: false },
+      createdAt: "2026-08-24T20:00:00.000Z",
     };
-    const renderPlan = buildVideoRenderPlan({
-      requestId: brief.requestId,
-      tenantId: brief.tenantId,
-      storyboardManifestKey: storyboardManifestV11Key(brief.tenantId, brief.requestId),
+    const plan = compileVideoRenderPlan({
       manifest,
-      createdAt: "2026-08-25T00:00:00.000Z",
+      storyboardManifestKey: storyboardManifestObjectKey("acme", "request-1"),
     });
-    expect(renderPlan.renderer.preferredProvider).toBe("pruna/p-video");
-    expect(renderPlan.renderer.executionState).toBe("disabled_pending_provider_capacity");
-    expect(renderPlan.governance.paidProviderExecutionAuthorized).toBe(false);
-    expect(renderPlan.targets[0]?.shots[0]?.referenceFrameSha256).toBe("e".repeat(64));
+    expect(plan.provider.id).toBe("pruna/p-video");
+    expect(plan.provider.activationState).toBe("disabled_until_paid_acceptance");
+    expect(plan.governance.providerExecutionAuthorized).toBe(false);
+    expect(plan.governance.publicationAuthority).toBe(false);
   });
 });

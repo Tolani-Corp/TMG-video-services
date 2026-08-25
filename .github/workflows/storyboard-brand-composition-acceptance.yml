@@ -1,30 +1,32 @@
-name: TMG Storyboard Brand Composition v1.1 Acceptance
+name: TMG Storyboard Brand Composition Acceptance
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - feature/checklist-production-intake-v1
+      - feature/storyboard-brand-composition-v1-1
     paths:
       - .github/workflows/storyboard-brand-composition-acceptance.yml
       - src/storyboard-brand-composition.ts
-      - src/storyboard-brand-composition-workflow.ts
+      - src/storyboard-brand-workflow.ts
+      - scripts/render-storyboard-brand-acceptance-config.mjs
+      - scripts/prepare-storyboard-brand-acceptance.mjs
+      - scripts/prepare-storyboard-brand-cleanup-index.mjs
+      - scripts/index-storyboard-brand-artifacts.mjs
+      - scripts/render-storyboard-brand-motion-preview.mjs
+      - scripts/verify-storyboard-brand-acceptance.mjs
+      - tests/storyboard-brand-composition.test.ts
+      - docs/STORYBOARD_BRAND_COMPOSITION_V1_1.md
       - src/image-runtime.ts
       - src/marketing-creative.ts
-      - src/index.ts
-      - scripts/render-storyboard-brand-composition-acceptance-config.mjs
-      - scripts/prepare-storyboard-brand-composition-acceptance.mjs
-      - scripts/verify-storyboard-brand-composition-acceptance.mjs
-      - scripts/render-storyboard-v11-motion-preview.mjs
-      - scripts/run-marketing-storyboard-context.mjs
-      - tests/storyboard-brand-composition.test.ts
+      - src/marketing-storyboard.ts
 
 permissions:
   contents: read
   statuses: write
 
 concurrency:
-  group: tmg-storyboard-brand-v11-${{ github.ref }}
+  group: tmg-storyboard-brand-v1-1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,13 +36,13 @@ jobs:
     timeout-minutes: 45
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY || secrets.FIRECRAWL_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
       ACCEPTANCE_SHA: ${{ github.sha }}
-      TMG_STORYBOARD_V11_CONTEXT_WORKER: tmg-storyboard-v11-context-${{ github.run_id }}
-      TMG_STORYBOARD_V11_RENDER_WORKER: tmg-storyboard-v11-render-${{ github.run_id }}
-      TMG_STORYBOARD_V11_R2_BUCKET: tmg-storyboard-v11-${{ github.run_id }}
-      TMG_STORYBOARD_V11_CONTEXT_WORKFLOW: tmg-storyboard-v11-context-${{ github.run_id }}
-      TMG_STORYBOARD_V11_RENDER_WORKFLOW: tmg-storyboard-v11-render-${{ github.run_id }}
+      TMG_STORYBOARD_BRAND_ACCEPT_WORKER: tmg-storyboard-brand-${{ github.run_id }}
+      TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET: tmg-storyboard-brand-${{ github.run_id }}
+      TMG_STORYBOARD_BRAND_ACCEPT_WORKFLOW: tmg-storyboard-brand-${{ github.run_id }}
+      TMG_STORYBOARD_BRAND_ACCEPT_REQUEST_ID: storyboard-brand-${{ github.run_id }}
+      TMG_STORYBOARD_BRAND_ACCEPT_INSTANCE_ID: storyboard-brand-instance-${{ github.run_id }}
 
     steps:
       - uses: actions/checkout@v4
@@ -56,273 +58,235 @@ jobs:
           corepack enable
           corepack prepare pnpm@10 --activate
 
-      - name: Mark v1.1 acceptance pending
+      - name: Mark storyboard brand acceptance pending
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --silent --show-error -X POST \
+          curl --fail-with-body --silent --show-error \
+            -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
-            -d "{\"state\":\"pending\",\"context\":\"TMG Storyboard Brand v1.1 / acceptance\",\"description\":\"Multi-shot brand composition acceptance is running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+            -d "{\"state\":\"pending\",\"context\":\"TMG Storyboard Brand v1.1 / acceptance\",\"description\":\"Multi-shot FLUX + exact brand composition canary running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
 
-      - name: Verify isolated-canary secrets are present
+      - name: Verify isolated-canary secret is present
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
-          test -n "${FIRECRAWL_API_KEY:-}" || { echo "::error::Missing FIRECRAWL_API_KEY"; exit 2; }
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN in development environment"; exit 2; }
 
-      - name: Install and validate exact head
+      - name: Validate exact head and prepare governed fixtures
         shell: bash
         run: |
           set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1 || [ ! -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ]; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg fonts-dejavu-core
+          fi
           pnpm install --no-frozen-lockfile
           pnpm cf-typegen
           pnpm typecheck
           pnpm test
           pnpm marketing:check
-          node scripts/render-storyboard-brand-composition-acceptance-config.mjs
-          command -v ffmpeg >/dev/null || { sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core; }
-          command -v ffprobe >/dev/null || { echo "::error::ffprobe unavailable"; exit 4; }
-          test -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf || { sudo apt-get update && sudo apt-get install -y fonts-dejavu-core; }
+          node scripts/render-storyboard-brand-acceptance-config.mjs
+          node scripts/prepare-storyboard-brand-acceptance.mjs
+          node scripts/prepare-storyboard-brand-cleanup-index.mjs
 
-      - name: Provision isolated v1.1 R2
+      - name: Provision and seed isolated private R2
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec wrangler r2 bucket create "${TMG_STORYBOARD_V11_R2_BUCKET}"
-          touch .storyboard-v11-r2-created
+          pnpm exec wrangler r2 bucket create "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}"
+          touch .storyboard-brand-r2-created
+          node - <<'NODE' > storyboard-brand-seed-index.tsv
+          const x = JSON.parse(require("fs").readFileSync("storyboard-brand-fixture-index.json", "utf8"));
+          console.log(`${x.files.source.fileName}\t${x.files.source.objectKey}`);
+          console.log(`${x.files.logo.fileName}\t${x.files.logo.objectKey}`);
+          for (const item of x.files.derivatives) console.log(`${item.fileName}\t${item.objectKey}`);
+          NODE
+          while IFS=$'\t' read -r file key; do
+            pnpm exec wrangler r2 object put "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${key}" \
+              --file "${file}" --content-type image/webp --remote --config .wrangler.storyboard-brand.acceptance.json
+          done < storyboard-brand-seed-index.tsv
+          SOURCE_MANIFEST_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-brand-fixture-index.json","utf8")).sourceManifestKey')"
+          CREATIVE_BRIEF_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-brand-fixture-index.json","utf8")).creativeBriefKey')"
+          pnpm exec wrangler r2 object put "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${SOURCE_MANIFEST_KEY}" \
+            --file storyboard-brand-image-manifest.json --content-type application/json --remote --config .wrangler.storyboard-brand.acceptance.json
+          pnpm exec wrangler r2 object put "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${CREATIVE_BRIEF_KEY}" \
+            --file storyboard-brand-creative-brief.json --content-type application/json --remote --config .wrangler.storyboard-brand.acceptance.json
 
-      - name: Deploy isolated context Worker and Workflow
-        id: context_deploy
+      - name: Deploy isolated storyboard brand Worker and Workflow
+        id: deploy
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec wrangler deploy --config .wrangler.storyboard-v11.context.json 2>&1 | tee storyboard-v11-context-deploy.log
-          touch .storyboard-v11-context-deployed
-          WORKER_URL="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' storyboard-v11-context-deploy.log | tail -1)"
-          test -n "${WORKER_URL}" || { echo "::error::Could not resolve v1.1 context Worker URL"; exit 4; }
+          pnpm exec wrangler deploy --config .wrangler.storyboard-brand.acceptance.json 2>&1 | tee storyboard-brand-deploy.log
+          touch .storyboard-brand-worker-deployed
+          WORKER_URL="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' storyboard-brand-deploy.log | tail -1)"
+          test -n "${WORKER_URL}" || { echo "::error::Could not resolve storyboard brand Worker URL"; exit 4; }
           echo "worker_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Bind Firecrawl secret
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s' "${FIRECRAWL_API_KEY}" | pnpm exec wrangler secret put FIRECRAWL_API_KEY --config .wrangler.storyboard-v11.context.json
-
-      - name: Deploy isolated v1.1 renderer Workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm exec wrangler deploy --config .wrangler.storyboard-v11.renderer.json
-          touch .storyboard-v11-render-deployed
-
-      - name: Prove authorized synthetic context surface is reachable
+      - name: Prove isolated renderer surface is reachable
         shell: bash
         run: |
           set -euo pipefail
           ready=false
           for attempt in $(seq 1 30); do
-            status="$(curl --silent --show-error --output storyboard-v11-fixture.html --write-out '%{http_code}' "${{ steps.context_deploy.outputs.worker_url }}/__acceptance/marketing-fixture" || true)"
-            if [ "${status}" = "200" ] && grep -q "TMG Launchpad" storyboard-v11-fixture.html; then ready=true; break; fi
-            sleep 2
-          done
-          test "${ready}" = true || { echo "::error::v1.1 context fixture did not become ready"; exit 5; }
-
-      - name: Execute authorized site to immutable creative brief
-        shell: bash
-        env:
-          TMG_MARKETING_STORYBOARD_BASE_URL: ${{ steps.context_deploy.outputs.worker_url }}
-        run: node scripts/run-marketing-storyboard-context.mjs
-
-      - name: Seed rights-cleared ImageAssetManifest fixture
-        shell: bash
-        run: |
-          set -euo pipefail
-          REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-context-request.json","utf8")).requestId')"
-          echo "TMG_STORYBOARD_V11_REQUEST_ID=${REQUEST_ID}" >> "$GITHUB_ENV"
-          TMG_STORYBOARD_V11_REQUEST_ID="${REQUEST_ID}" node scripts/prepare-storyboard-brand-composition-acceptance.mjs
-          SOURCE_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-v11-fixture.json","utf8")).sourceKey')"
-          LOGO_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-v11-fixture.json","utf8")).logoKey')"
-          MANIFEST_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-v11-fixture.json","utf8")).manifestKey')"
-          pnpm exec wrangler r2 object put "${TMG_STORYBOARD_V11_R2_BUCKET}/${SOURCE_KEY}" --file storyboard-v11-source.png --remote --config .wrangler.storyboard-v11.renderer.json
-          pnpm exec wrangler r2 object put "${TMG_STORYBOARD_V11_R2_BUCKET}/${LOGO_KEY}" --file storyboard-v11-logo.png --remote --config .wrangler.storyboard-v11.renderer.json
-          pnpm exec wrangler r2 object put "${TMG_STORYBOARD_V11_R2_BUCKET}/${MANIFEST_KEY}" --file storyboard-v11-image-manifest.json --remote --content-type application/json --config .wrangler.storyboard-v11.renderer.json
-
-      - name: Retrieve immutable campaign context and creative brief
-        shell: bash
-        run: |
-          set -euo pipefail
-          ROOT="tenants/storyboard_acceptance/production-requests/${TMG_STORYBOARD_V11_REQUEST_ID}"
-          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_V11_R2_BUCKET}/${ROOT}/marketing/campaign-context-v1.json" --file storyboard-v11-campaign-context.json --remote --config .wrangler.storyboard-v11.context.json
-          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_V11_R2_BUCKET}/${ROOT}/marketing/creative-brief-v1.json" --file storyboard-v11-creative-brief.json --remote --config .wrangler.storyboard-v11.context.json
-
-      - name: Trigger multi-shot brand composition Workflow
-        id: trigger
-        shell: bash
-        run: |
-          set -euo pipefail
-          INSTANCE_ID="$(node -e 'console.log(crypto.randomUUID())')"
-          PARAMS="$(node - <<'NODE'
-          const fs = require('fs');
-          const context = JSON.parse(fs.readFileSync('storyboard-context-request.json', 'utf8'));
-          const fixture = JSON.parse(fs.readFileSync('storyboard-v11-fixture.json', 'utf8'));
-          process.stdout.write(JSON.stringify({
-            schemaVersion: 'tmg.storyboard-brand-composition-request.v1.1',
-            requestId: context.requestId,
-            tenantId: context.tenantId,
-            creativeBriefKey: context.creativeBriefKey,
-            imageAssetManifestKey: fixture.manifestKey,
-            requestedAt: new Date().toISOString(),
-          }));
-          NODE
-          )"
-          pnpm exec wrangler workflows trigger "${TMG_STORYBOARD_V11_RENDER_WORKFLOW}" "${PARAMS}" --id "${INSTANCE_ID}" --config .wrangler.storyboard-v11.renderer.json
-          echo "instance_id=${INSTANCE_ID}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "${INSTANCE_ID}" > storyboard-v11-workflow-id.txt
-
-      - name: Retrieve immutable StoryboardManifest and VideoRenderPlan
-        shell: bash
-        run: |
-          set -euo pipefail
-          ROOT="tenants/storyboard_acceptance/production-requests/${TMG_STORYBOARD_V11_REQUEST_ID}/storyboard-v1-1/control"
-          ready=false
-          for attempt in $(seq 1 180); do
-            if pnpm exec wrangler r2 object get "${TMG_STORYBOARD_V11_R2_BUCKET}/${ROOT}/storyboard-manifest-v1.1.json" --file storyboard-v11-manifest.json --remote --config .wrangler.storyboard-v11.renderer.json >/dev/null 2>&1; then
+            status="$(curl --silent --show-error --output storyboard-brand-health.json --write-out '%{http_code}' "${{ steps.deploy.outputs.worker_url }}/" || true)"
+            if [ "${status}" = "200" ] && grep -q 'tmg-storyboard-brand-composition' storyboard-brand-health.json && grep -q '"pVideoExecutionAuthorized":false' storyboard-brand-health.json; then
               ready=true
               break
             fi
-            sleep 3
+            sleep 2
           done
-          test "${ready}" = true || { echo "::error::StoryboardManifest v1.1 was not produced"; exit 6; }
-          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_V11_R2_BUCKET}/${ROOT}/video-render-plan-v1.json" --file storyboard-v11-video-render-plan.json --remote --config .wrangler.storyboard-v11.renderer.json
+          test "${ready}" = true || { cat storyboard-brand-health.json || true; echo "::error::Storyboard brand renderer did not become ready"; exit 5; }
 
-      - name: Retrieve all nine composed storyboard frames
+      - name: Trigger governed multi-shot storyboard workflow
         shell: bash
         run: |
           set -euo pipefail
-          node - <<'NODE' > storyboard-v11-composed-keys.tsv
-          const x = JSON.parse(require('fs').readFileSync('storyboard-v11-manifest.json', 'utf8'));
-          x.targets.forEach((target, ti) => target.shots.forEach((shot, si) => console.log(`${ti + 1}\t${si + 1}\t${shot.evidence.composedFrame.objectKey}`)));
-          NODE
-          while IFS=$'\t' read -r ti si key; do
-            pnpm exec wrangler r2 object get "${TMG_STORYBOARD_V11_R2_BUCKET}/${key}" --file "storyboard-v11-composed-${ti}-${si}.webp" --remote --config .wrangler.storyboard-v11.renderer.json
-          done < storyboard-v11-composed-keys.tsv
+          PARAMS="$(node -p 'JSON.stringify(JSON.parse(require("fs").readFileSync("storyboard-brand-request.json","utf8")))')"
+          pnpm exec wrangler workflows trigger "${TMG_STORYBOARD_BRAND_ACCEPT_WORKFLOW}" "${PARAMS}" \
+            --id "${TMG_STORYBOARD_BRAND_ACCEPT_INSTANCE_ID}" \
+            --config .wrangler.storyboard-brand.acceptance.json
 
-      - name: Verify v1.1 manifests, SHA evidence, rights, and authority
+      - name: Wait for top-level storyboard workflow terminal state
         shell: bash
-        run: node scripts/verify-storyboard-brand-composition-acceptance.mjs
+        run: |
+          set -euo pipefail
+          completed=false
+          for attempt in $(seq 1 240); do
+            pnpm exec wrangler workflows instances describe "${TMG_STORYBOARD_BRAND_ACCEPT_WORKFLOW}" "${TMG_STORYBOARD_BRAND_ACCEPT_INSTANCE_ID}" \
+              --config .wrangler.storyboard-brand.acceptance.json > storyboard-brand-workflow.txt 2>&1 || true
+            STATUS="$(sed -n 's/^Status:[[:space:]]*//p' storyboard-brand-workflow.txt | head -1)"
+            case "${STATUS}" in
+              *Complete*|*Completed*|*Success*) completed=true; break ;;
+              *Errored*|*Terminated*|*Failed*) cat storyboard-brand-workflow.txt; exit 6 ;;
+            esac
+            sleep 3
+          done
+          test "${completed}" = true || { cat storyboard-brand-workflow.txt; echo "::error::Storyboard brand workflow did not complete in bounded window"; exit 7; }
+          cat storyboard-brand-workflow.txt
 
-      - name: Render and verify title cards and target-specific motion mockups
+      - name: Retrieve immutable manifests and all generated/composed assets
         shell: bash
-        run: node scripts/render-storyboard-v11-motion-preview.mjs
+        run: |
+          set -euo pipefail
+          TENANT_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-brand-request.json","utf8")).tenantId')"
+          REQUEST_ID="${TMG_STORYBOARD_BRAND_ACCEPT_REQUEST_ID}"
+          ROOT="tenants/${TENANT_ID}/production-requests/${REQUEST_ID}/outputs/marketing/storyboard-brand-v1-1"
+          ENHANCED_KEY="tenants/${TENANT_ID}/image-runtime/${REQUEST_ID}/control/image-asset-manifest-v1.1.json"
+          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${ENHANCED_KEY}" \
+            --file storyboard-brand-enhanced-image-manifest.json --remote --config .wrangler.storyboard-brand.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${ROOT}/control/storyboard-manifest-v1.1.json" \
+            --file storyboard-brand-manifest.json --remote --config .wrangler.storyboard-brand.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${ROOT}/handoff/video-render-plan-v1.json" \
+            --file storyboard-brand-video-render-plan.json --remote --config .wrangler.storyboard-brand.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${ROOT}/review/storyboard-brand-review-package-v1.1.json" \
+            --file storyboard-brand-review-package.json --remote --config .wrangler.storyboard-brand.acceptance.json
+          node scripts/index-storyboard-brand-artifacts.mjs
+          while IFS=$'\t' read -r local_file object_key; do
+            pnpm exec wrangler r2 object get "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${object_key}" \
+              --file "${local_file}" --remote --config .wrangler.storyboard-brand.acceptance.json
+          done < storyboard-brand-retrieval-index.tsv
+
+      - name: Compile target-specific deterministic multi-shot motion mockups
+        shell: bash
+        run: node scripts/render-storyboard-brand-motion-preview.mjs
+
+      - name: Verify provenance, exact composition, render handoff, and motion evidence
+        shell: bash
+        run: node scripts/verify-storyboard-brand-acceptance.mjs
 
       - name: Capture Workflow evidence
         if: always()
         shell: bash
         run: |
           set +e
-          if [ -f storyboard-v11-workflow-id.txt ]; then
-            pnpm exec wrangler workflows instances describe "${TMG_STORYBOARD_V11_RENDER_WORKFLOW}" "$(cat storyboard-v11-workflow-id.txt)" --config .wrangler.storyboard-v11.renderer.json > storyboard-v11-workflow.txt 2>&1 || true
-          fi
+          pnpm exec wrangler workflows instances describe "${TMG_STORYBOARD_BRAND_ACCEPT_WORKFLOW}" "${TMG_STORYBOARD_BRAND_ACCEPT_INSTANCE_ID}" \
+            --config .wrangler.storyboard-brand.acceptance.json > storyboard-brand-workflow.txt 2>&1 || true
 
-      - name: Upload sanitized v1.1 acceptance evidence
+      - name: Upload sanitized storyboard brand acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tmg-storyboard-brand-v11-${{ github.run_id }}
+          name: tmg-storyboard-brand-v1-1-acceptance-${{ github.run_id }}
           if-no-files-found: warn
           path: |
-            storyboard-context-request.json
-            storyboard-v11-campaign-context.json
-            storyboard-v11-creative-brief.json
-            storyboard-v11-fixture.json
-            storyboard-v11-image-manifest.json
-            storyboard-v11-manifest.json
-            storyboard-v11-video-render-plan.json
-            storyboard-v11-acceptance-evidence.json
-            storyboard-v11-motion-evidence.json
-            storyboard-v11-composed-*.webp
-            storyboard-v11-title-*.png
-            storyboard-v11-end-*.png
-            storyboard-v11-preview-*.mp4
-            storyboard-v11-workflow.txt
+            storyboard-brand-request.json
+            storyboard-brand-image-manifest.json
+            storyboard-brand-creative-brief.json
+            storyboard-brand-enhanced-image-manifest.json
+            storyboard-brand-manifest.json
+            storyboard-brand-video-render-plan.json
+            storyboard-brand-review-package.json
+            storyboard-brand-motion-preview-evidence.json
+            storyboard-brand-acceptance-evidence.json
+            storyboard-brand-retrieval-index.json
+            storyboard-brand-workflow.txt
+            storyboard-brand-generated-*.bin
+            storyboard-brand-composed-*.webp
+            storyboard-brand-title-*.webp
+            storyboard-brand-end-*.webp
+            storyboard-brand-preview-*.mp4
 
-      - name: Remove isolated context Worker
+      - name: Remove isolated storyboard brand Worker
         if: always()
         shell: bash
         run: |
           set +e
-          if [ -f .storyboard-v11-context-deployed ]; then pnpm exec wrangler delete --name "${TMG_STORYBOARD_V11_CONTEXT_WORKER}" --config .wrangler.storyboard-v11.context.json; fi
-
-      - name: Remove isolated renderer Worker
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          if [ -f .storyboard-v11-render-deployed ]; then pnpm exec wrangler delete --name "${TMG_STORYBOARD_V11_RENDER_WORKER}" --config .wrangler.storyboard-v11.renderer.json; fi
+          rc=0
+          if [ -f .storyboard-brand-worker-deployed ]; then
+            pnpm exec wrangler delete --name "${TMG_STORYBOARD_BRAND_ACCEPT_WORKER}" --config .wrangler.storyboard-brand.acceptance.json || rc=1
+          fi
+          exit "${rc}"
 
       - name: Remove all isolated R2 objects and bucket
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          if [ ! -f .storyboard-v11-r2-created ]; then exit 0; fi
-          KEYS=()
-          if [ -f storyboard-v11-fixture.json ]; then
-            while IFS= read -r key; do KEYS+=("${key}"); done < <(node - <<'NODE'
-          const x=JSON.parse(require('fs').readFileSync('storyboard-v11-fixture.json','utf8'));
-          console.log(x.sourceKey); console.log(x.logoKey); console.log(x.manifestKey);
-          NODE
-            )
+          set +e
+          rc=0
+          if [ ! -f .storyboard-brand-r2-created ]; then exit 0; fi
+          if [ -f storyboard-brand-cleanup-index.txt ]; then
+            while IFS= read -r key; do
+              [ -n "${key}" ] || continue
+              pnpm exec wrangler r2 object delete "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}/${key}" \
+                --remote --config .wrangler.storyboard-brand.acceptance.json >/dev/null 2>&1 || rc=1
+            done < storyboard-brand-cleanup-index.txt
           fi
-          if [ -f storyboard-context-request.json ]; then
-            REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-context-request.json","utf8")).requestId')"
-            ROOT="tenants/storyboard_acceptance/production-requests/${REQUEST_ID}"
-            KEYS+=("${ROOT}/control/production-plan-v1.json" "${ROOT}/control/marketing-discovery-plan-v1.json" "${ROOT}/outputs/production-package-v1.json" "${ROOT}/marketing/campaign-context-v1.json" "${ROOT}/marketing/creative-brief-v1.json" "${ROOT}/marketing/social-copy-v1.json" "${ROOT}/outputs/marketing/review-package-v1.json")
-            if [ -f storyboard-v11-campaign-context.json ]; then
-              i=1
-              while IFS= read -r job; do KEYS+=("${ROOT}/marketing/discovery/source-${i}-${job}.json"); i=$((i+1)); done < <(node -e 'const x=JSON.parse(require("fs").readFileSync("storyboard-v11-campaign-context.json","utf8")); for (const s of x.sources ?? []) console.log(s.crawlJobId)')
-            fi
-          fi
-          if [ -f storyboard-v11-manifest.json ]; then
-            while IFS= read -r key; do KEYS+=("${key}"); done < <(node - <<'NODE'
-          const x=JSON.parse(require('fs').readFileSync('storyboard-v11-manifest.json','utf8'));
-          console.log(`tenants/${x.tenantId}/production-requests/${x.requestId}/storyboard-v1-1/control/storyboard-manifest-v1.1.json`);
-          console.log(`tenants/${x.tenantId}/production-requests/${x.requestId}/storyboard-v1-1/control/video-render-plan-v1.json`);
-          for (const t of x.targets) for (const s of t.shots) { console.log(s.evidence.rawFrame.objectKey); console.log(s.evidence.composedFrame.objectKey); }
-          NODE
-            )
-          fi
-          for key in "${KEYS[@]}"; do
-            pnpm exec wrangler r2 object delete "${TMG_STORYBOARD_V11_R2_BUCKET}/${key}" --remote --config .wrangler.storyboard-v11.renderer.json >/dev/null 2>&1 || true
-          done
-          pnpm exec wrangler r2 bucket delete "${TMG_STORYBOARD_V11_R2_BUCKET}"
+          pnpm exec wrangler r2 bucket delete "${TMG_STORYBOARD_BRAND_ACCEPT_R2_BUCKET}" >/dev/null 2>&1 || rc=1
+          exit "${rc}"
 
-      - name: Mark v1.1 acceptance success
+      - name: Mark storyboard brand acceptance success
         if: success()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --silent --show-error -X POST \
-            -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" \
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
-            -d "{\"state\":\"success\",\"context\":\"TMG Storyboard Brand v1.1 / acceptance\",\"description\":\"9-shot composition, motion mockups, render plan, teardown passed\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+            -d "{\"state\":\"success\",\"context\":\"TMG Storyboard Brand v1.1 / acceptance\",\"description\":\"10 FLUX shots + exact brand composition + render handoff verified\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
 
-      - name: Mark v1.1 acceptance failure
+      - name: Mark storyboard brand acceptance failure
         if: failure()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --silent --show-error -X POST \
-            -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" \
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
-            -d "{\"state\":\"failure\",\"context\":\"TMG Storyboard Brand v1.1 / acceptance\",\"description\":\"v1.1 acceptance failed; inspect sanitized evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+            -d "{\"state\":\"failure\",\"context\":\"TMG Storyboard Brand v1.1 / acceptance\",\"description\":\"Storyboard brand canary failed; inspect evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"

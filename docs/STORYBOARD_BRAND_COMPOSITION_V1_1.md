@@ -4,106 +4,199 @@
 
 Turn verified campaign context plus approved visual assets into a reviewed, multi-shot, brand-composed storyboard system that can drive both human campaign review and future paid video rendering.
 
-This increment is review-only. It does not grant publication authority, external-distribution authority, or paid P-Video execution authority.
+This increment is deliberately stacked on the accepted Marketing/Image/Workers AI preview baseline. It does not grant publication authority, external-distribution authority, or paid-provider execution authority.
 
-## Runtime topology
+## Canonical flow
 
 ```text
-authorized website/app
-  -> Firecrawl governed discovery
-  -> tmg.campaign-context.v1
-  -> tmg.marketing-creative-brief.v1
-  + accepted tmg.image-asset-manifest.v1
-  -> multi-shot planner
-  -> Workers AI FLUX shot generation
-  -> exact approved-logo composition through Cloudflare Images
-  -> tmg.storyboard-manifest.v1.1
-  -> deterministic title/end-card treatment
-  -> target-specific H.264 review mockups
-  -> tmg.video-render-plan.v1
-  -> human review
-  -> P-Video only after separate provider-capacity/acceptance authority
+verified tmg.marketing-creative-brief.v1
++ verified tmg.image-asset-manifest.v1
+        |
+        v
+composition-ready tmg.image-asset-manifest.v1.1
+        |
+        v
+multi-shot target planning
+        |
+        +--> FLUX concept frames (no exact assets / no typography)
+        |
+        v
+Cloudflare Images deterministic composition
+  + exact approved logo
+  + exact authorized platform derivative on product/feature shots
+        |
+        v
+tmg.storyboard-manifest.v1.1
+  + title visual plate
+  + end visual plate
+        |
+        v
+deterministic target motion review mockups
+        |
+        v
+tmg.video-render-plan.v1
+  provider = pruna/p-video
+  providerExecutionAuthorized = false
+        |
+        v
+human review / future paid-provider acceptance
 ```
 
-## Files
+## Runtime boundaries
 
-Core runtime:
-- `src/storyboard-brand-composition.ts` — contracts, planner, R2 keys, title/end-card specs and `VideoRenderPlan` compiler.
-- `src/storyboard-brand-composition-workflow.ts` — Workers AI + Cloudflare Images + R2 Workflow.
-- `src/storyboard-brand-composition-entrypoint.ts` — ES-module Worker entrypoint for isolated deployment.
-- `src/index.ts` — exports `StoryboardBrandCompositionWorkflow`.
+### Workers AI / FLUX
 
-Validation:
-- `tests/storyboard-brand-composition.test.ts`
-- `scripts/render-storyboard-brand-composition-acceptance-config.mjs`
-- `scripts/prepare-storyboard-brand-composition-acceptance.mjs`
-- `scripts/verify-storyboard-brand-composition-acceptance.mjs`
-- `scripts/render-storyboard-v11-motion-preview.mjs`
-- `.github/workflows/storyboard-brand-composition-acceptance.yml`
+`@cf/black-forest-labs/flux-1-schnell` creates scene concepts only. Prompts explicitly prohibit exact logos, exact product screenshots, discovered assets, third-party marks, typography, watermarks, and unsupported marketing claims.
 
-## Canonical contracts
+The generated project types are authoritative for the Worker call. v1.1 uses four diffusion steps and does not claim a provider seed is applied.
+
+### Cloudflare Images
+
+Cloudflare Images performs the deterministic exact-asset composition after FLUX generation. Every exact asset is re-read from private R2 and SHA-256 verified against the authorized ImageAssetManifest before use.
+
+Every composed shot receives the approved logo. `product_showcase` and `feature_value` shots additionally receive the target-appropriate authorized platform derivative. A mismatch between expected and actual source, logo, derivative, composition-plan, or output SHA fails closed.
+
+### Title and end cards
+
+The Worker creates target-sized deterministic visual plates from an authorized platform derivative plus the exact approved logo. The card manifest carries verified title/support/CTA copy, but `textRenderedInImage=false` in the Worker artifact. The isolated deterministic motion renderer applies that verified copy for review ergonomics. No generative model is permitted to reproduce brand text or legal copy.
+
+### Paid video provider
+
+`tmg.video-render-plan.v1` is a handoff artifact only. It references reviewed composed frames and cards, but:
+
+- provider is `pruna/p-video`;
+- activation state is `disabled_until_paid_acceptance`;
+- `providerExecutionAuthorized=false`;
+- publication and external distribution remain false.
+
+The plan does not execute P-Video and cannot bypass the separate paid-provider acceptance gate.
+
+## Multi-shot target plans
+
+The initial deterministic shot templates are:
+
+- TikTok and other vertical social targets: `hook -> product_showcase -> cta`.
+- YouTube Shorts: `hook -> problem -> product_showcase -> cta`.
+- Website/web-app hero: `product_showcase -> feature_value -> cta`.
+
+Shot durations are derived from the target profile and sum to the declared target duration. Copy can only be projected from the verified `MarketingCreativeBrief`.
+
+## Canonical artifacts
+
+### `tmg.image-asset-manifest.v1.1`
+
+An immutable projection of the accepted v1 manifest. It records:
+
+- source v1 manifest object key and SHA;
+- exact approved logo requirement;
+- exact product-asset authorization requirement;
+- authorized source/logo/platform-derivative assets;
+- composition defaults;
+- inherited rights and governance.
 
 ### `tmg.storyboard-manifest.v1.1`
 
-Contains request/tenant identity, immutable creative and ImageAssetManifest references, three target shot boards, three shots per target (`hook`, `product_value`, `cta`), exact timing, raw/composed SHA evidence, exact approved-logo SHA evidence, title/end-card specs, rights evidence and review-only governance.
+The canonical reviewed pre-production graph. Per target it contains:
+
+- profile and target metadata;
+- ordered shot plans and timing;
+- verified copy intent;
+- FLUX prompt and generated-frame SHA evidence;
+- deterministic composition plan;
+- composed-frame SHA evidence;
+- title/end visual plates;
+- review-only governance.
 
 ### `tmg.video-render-plan.v1`
 
-Contains the immutable StoryboardManifest reference, target profiles, shot timing/prompts, composed-frame keys/SHA-256 references and a future provider handoff to `pruna/p-video`. It is fail-closed with `executionState=disabled_pending_provider_capacity`, `storyboardGroundingRequired=true`, and `paidProviderExecutionAuthorized=false`.
+The future paid-renderer handoff. It references only composed frame object keys/SHAs and card object keys/SHAs from the immutable StoryboardManifest.
 
-## ImageAssetManifest dependency
+### `tmg.storyboard-brand-review-package.v1.1`
 
-Only accepted `tmg.image-asset-manifest.v1` records are allowed. Tenant must match; rights must be verified for `marketing_creative`; source reuse and logo overlay must be authorized; the approved-logo SHA must be valid; and human-review/publication/distribution gates must remain review-only. The logo object is fetched and re-hashed immediately before composition.
+A concise human-review handoff linking the enhanced ImageAssetManifest, StoryboardManifest, and VideoRenderPlan while retaining publication/distribution authority as false.
 
-## Multi-shot planning
+## R2 key layout
 
-Every target receives three shots: hook, product value and CTA. Durations sum exactly to the target duration. FLUX prompts prohibit generated typography, exact logos, screenshots/UI, exact discovered assets and unsupported claims. Rights-cleared image derivatives can be referenced as supporting visual evidence, but FLUX is told not to recreate or imitate them.
+```text
+tenants/{tenantId}/image-runtime/{requestId}/
+  control/
+    image-asset-manifest-v1.json
+    image-asset-manifest-v1.1.json
+  inputs/
+    ... authorized source/logo objects ...
+  derivatives/
+    ... authorized Image Runtime derivatives ...
 
-## Generation and composition boundary
+tenants/{tenantId}/production-requests/{requestId}/
+  marketing/
+    creative-brief-v1.json
+  outputs/marketing/storyboard-brand-v1-1/
+    control/
+      storyboard-manifest-v1.1.json
+    targets/{variantId}/
+      shots/{shotId}/
+        generated.jpg|png
+        composed.webp
+      cards/
+        title.webp
+        end.webp
+    handoff/
+      video-render-plan-v1.json
+    review/
+      storyboard-brand-review-package-v1.1.json
+```
 
-Workers AI model: `@cf/black-forest-labs/flux-1-schnell`, four diffusion steps. Raw JPEG/PNG frames are SHA-bound and private. Cloudflare Images then resizes/crops the generated frame and overlays the independently re-hashed approved-logo bytes at full opacity. Composed WebPs record output SHA, raw-frame SHA, exact-logo SHA and rights evidence.
-
-## R2 keys
-
-Root:
-`tenants/{tenantId}/production-requests/{requestId}/storyboard-v1-1/`
-
-Control:
-- `control/storyboard-manifest-v1.1.json`
-- `control/video-render-plan-v1.json`
-
-Shots:
-- `{targetProfileId}/shots/{shotId}/raw.jpg|png`
-- `{targetProfileId}/shots/{shotId}/composed.webp`
-
-Image rights authority remains under:
-`tenants/{tenantId}/image-runtime/{imageRequestId}/control/image-asset-manifest-v1.json`
-
-## Title/end cards and motion mockups
-
-The manifest contains title/end-card specs using the first/last composed shots and exact approved-logo reference. Acceptance renders deterministic PNG review cards and three H.264 MP4 mockups: TikTok 9:16 / 7s, YouTube Shorts 9:16 / 8s, and Website Hero 16:9 / 6s. ffprobe verifies codec, dimensions and duration. These are review mockups, not P-Video outputs.
-
-## Acceptance
-
-The isolated acceptance proves exact-head validation; temporary R2; isolated Firecrawl and AI+Images Workers/Workflows; a synthetic rights-cleared ImageAssetManifest; real generation of 9 FLUX raw shots; real exact-logo composition of 9 WebPs; SHA/rights/authority verification; immutable StoryboardManifest and VideoRenderPlan; 3 title cards, 3 end cards and 3 H.264 motion mockups; sanitized evidence; and complete Worker/R2 teardown.
-
-### Accepted implementation
-
-- Head: `fadd21e69855ad12377f2cfa844ab54d9acd11c2`
-- Quality: PASS — run `32880977790`
-- Storyboard Brand Composition v1.1 acceptance: PASS — run `32880977821`
-- Evidence artifact: `tmg-storyboard-brand-v11-32880977821`
-- Artifact digest: `sha256:0f54e1cc18ecfdf063877fd6b65c1e140e5df4669f1cdf41fe7ef7086453cceb`
-- Verified outputs: 9 multi-shot FLUX frames, 9 exact-logo Cloudflare Images compositions, 3 title cards, 3 end cards, 3 H.264 target motion mockups, immutable StoryboardManifest v1.1 and immutable VideoRenderPlan v1.
-- Teardown: both temporary Workers and all temporary R2 objects/bucket deleted successfully.
-- `paidProviderExecutionAuthorized=false`, `publicationAuthority=false`, `externalDistributionAuthority=false` throughout.
+All paths are tenant-scoped. Cross-tenant object references are not valid inputs.
 
 ## Governance invariants
 
-Crawl authority is separate from asset-reuse authority. ImageAssetManifest is the visual-rights authority. Tenant scopes cannot cross. Exact logos come only from approved bytes and are re-hashed immediately before composition. Generated/composed/card/mockup artifacts remain review-only. VideoRenderPlan cannot authorize P-Video execution. Human review is mandatory. No production activation, public processing endpoint, automated distribution, approval bypass, or customer media in CI is introduced.
+1. Crawl/discovery authorization never implies exact asset reuse authorization.
+2. Only an accepted ImageAssetManifest may supply exact brand assets.
+3. Exact asset bytes are SHA-verified immediately before deterministic composition.
+4. FLUX concept generation cannot reproduce exact logos/product screenshots by design.
+5. Every generated/composed/card/motion artifact requires human review.
+6. No storyboard artifact grants publication or external-distribution authority.
+7. VideoRenderPlan creation does not authorize P-Video execution.
+8. Immutable R2 keys may be reused only when all identity/provenance metadata match.
+9. No cross-tenant asset reuse is permitted.
+10. Production topology is unchanged by this increment.
 
-## PR scope
+## Isolated acceptance
 
-Included: multi-shot planning; governed FLUX generation; exact rights-cleared logo composition; immutable StoryboardManifest; deterministic title/end-card specs/rendering; target-specific motion mockups; immutable P-Video handoff with paid execution disabled; isolated acceptance and teardown evidence.
+The v1.1 canary starts from synthetic but explicitly rights-cleared canonical `ImageAssetManifest v1` and `MarketingCreativeBrief v1` fixtures. Those dependencies are already live-proven by the stacked baseline; the v1.1 canary isolates the new behavior.
 
-Excluded: production activation; public storyboard endpoints; automated publication/distribution; P-Video execution; generative recreation/editing of approved logos/customer assets; approval bypasses.
+The canary must prove:
+
+1. exact-head typecheck/tests are green;
+2. one isolated private R2 bucket and standalone Worker/Workflow are provisioned;
+3. v1 ImageAssetManifest is projected into v1.1 with source-manifest SHA lineage;
+4. three targets produce a `3 / 4 / 3` shot topology (10 shots total);
+5. all 10 shots execute real FLUX inference;
+6. all 10 generated frames are SHA-bound and image-signature verified;
+7. all 10 frames receive deterministic exact approved-logo composition;
+8. product/feature shots receive only authorized target derivatives;
+9. each target gets title and end visual plates with exact approved logo;
+10. immutable StoryboardManifest, VideoRenderPlan, and review package are persisted;
+11. three deterministic H.264 multi-shot review mockups are compiled and verified;
+12. P-Video execution authority remains false;
+13. evidence is uploaded;
+14. standalone Worker and every temporary R2 object/bucket are removed successfully.
+
+The acceptance status must remain red if any real generated/composed artifact is absent, if provenance differs, if governance is weakened, or if teardown fails.
+
+## Non-goals
+
+v1.1 does not include:
+
+- actual P-Video inference;
+- production activation;
+- publication or social distribution;
+- cross-tenant asset reuse;
+- reuse of candidate-only Firecrawl images;
+- generative recreation of exact logos or screenshots;
+- generative image editing;
+- autonomous approval of creative claims.
+
+## Baseline reconciliation
+
+PR #49 is reconciled against `feature/checklist-production-intake-v1` at `06eaf7383f91e5d86277a4a7ed3a2b6755b46c91`. The richer 10-shot Storyboard & Brand Composition v1.1 contract remains canonical. The baseline duplicate `src/storyboard-brand-composition-workflow.ts` surface is retained only as a compatibility forwarder to `src/storyboard-brand-workflow.ts`; it is not a second implementation or authority path.
