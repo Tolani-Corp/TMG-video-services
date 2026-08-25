@@ -205,7 +205,7 @@ function supportingDerivativeForVariant(
   manifest: ImageAssetManifest,
   variant: MarketingCreativeVariant,
 ): ImageDerivativeArtifact | undefined {
-  const platform = variant.target.platform === "web" || variant.target.platform === "website"
+  const platform = variant.target.platform === "website" || variant.target.platform === "web_app"
     ? "website"
     : variant.target.platform;
   return manifest.derivatives.find((derivative) => derivative.platform === platform);
