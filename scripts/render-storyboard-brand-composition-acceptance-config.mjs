@@ -58,7 +58,7 @@ const context = {
 const renderer = {
   ...shared,
   name: process.env.TMG_STORYBOARD_V11_RENDER_WORKER,
-  main: "src/storyboard-brand-composition-workflow.ts",
+  main: "src/storyboard-brand-composition-entrypoint.ts",
   ai: { binding: "AI" },
   images: { binding: "IMAGES" },
   workflows: [{
