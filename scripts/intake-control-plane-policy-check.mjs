@@ -11,7 +11,18 @@ function parseJsonc(text) {
 }
 
 async function main() {
-  const [migration, api, store, rootConfigText, apiConfigText, accessAuth, bootstrap] = await Promise.all([
+  const [
+    migration,
+    api,
+    store,
+    rootConfigText,
+    apiConfigText,
+    accessAuth,
+    bootstrap,
+    activationWorkflow,
+    readinessWorkflow,
+    readinessScript,
+  ] = await Promise.all([
     readFile("migrations/0001_intake_control_plane.sql", "utf8"),
     readFile("src/intake-api.ts", "utf8"),
     readFile("src/intake-store.ts", "utf8"),
@@ -19,6 +30,9 @@ async function main() {
     readFile("wrangler.intake-api.jsonc", "utf8"),
     readFile("src/access-auth.ts", "utf8"),
     readFile("src/ui-bootstrap.ts", "utf8"),
+    readFile(".github/workflows/intake-console-activation.yml", "utf8"),
+    readFile(".github/workflows/intake-cloudflare-readiness.yml", "utf8"),
+    readFile("scripts/intake-cloudflare-readiness.mjs", "utf8"),
   ]);
   const rootConfig = parseJsonc(rootConfigText);
   const apiConfig = parseJsonc(apiConfigText);
@@ -66,6 +80,37 @@ async function main() {
   assert(bootstrap.includes("processingAuthority: false"), "UI bootstrap must deny processing authority");
   assert(bootstrap.includes("publicationAuthority: false"), "UI bootstrap must deny publication authority");
   assert(bootstrap.includes("commercialAuthority: false"), "UI bootstrap must deny commercial authority");
+
+  assert(activationWorkflow.includes("workflow_dispatch:"), "Console activation must require explicit workflow dispatch");
+  assert(!activationWorkflow.includes("pull_request:"), "Console activation must never mutate Cloudflare from a pull_request trigger");
+  assert(!activationWorkflow.includes("push:"), "Console activation must never mutate Cloudflare from a push trigger");
+  const readinessIndex = activationWorkflow.indexOf("Prove Cloudflare credential and resource readiness without mutations");
+  const mutationPreparationIndex = activationWorkflow.indexOf("Prepare D1, zone, and Access before domain attachment");
+  assert(readinessIndex >= 0, "Console activation is missing the read-only Cloudflare readiness gate");
+  assert(mutationPreparationIndex > readinessIndex, "Read-only Cloudflare readiness must execute before mutation-capable preparation");
+  assert(activationWorkflow.includes("Wait for exact-head Quality success"), "Console activation must retain exact-head Quality gating");
+  assert(activationWorkflow.includes("intake-cloudflare-readiness.json"), "Activation evidence must include credential-readiness evidence");
+
+  assert(readinessWorkflow.includes("workflow_dispatch:"), "Credential readiness must be manually dispatched");
+  assert(!readinessWorkflow.includes("pull_request:"), "Credential readiness must not run automatically on pull requests");
+  assert(!readinessWorkflow.includes("push:"), "Credential readiness must not run automatically on push");
+  assert(readinessWorkflow.includes("TMG Intake Credential Readiness"), "Credential readiness status context is missing");
+  assert(readinessWorkflow.includes("read-only Cloudflare readiness"), "Credential readiness HOLD description must state the read-only boundary");
+
+  assert(readinessScript.includes('method: "GET"'), "Credential readiness probe must use explicit GET requests");
+  assert(!/method:\s*"(?:POST|PUT|PATCH|DELETE)"/.test(readinessScript), "Credential readiness script must remain mutation-free");
+  assert(readinessScript.includes("mutationAttempted: false"), "Credential readiness evidence must explicitly deny mutation attempts");
+  for (const probePath of [
+    "/user/tokens/verify",
+    "/d1/database?name=",
+    "/access/apps?per_page=100",
+    "/workers/scripts",
+    "/workers/domains?hostname=",
+    "/workers/routes",
+  ]) {
+    assert(readinessScript.includes(probePath), `Credential readiness probe missing Cloudflare visibility check: ${probePath}`);
+  }
+  assert(!readinessScript.includes("app.tolanimediagroup.com"), "Credential readiness must not touch the reserved customer app domain");
 
   console.log("TMG authenticated intake control-plane policy: PASS");
 }
