@@ -60,7 +60,7 @@ describe("Workers AI storyboard preview", () => {
     const prompt = buildMarketingStoryboardPrompt(variant);
     expect(prompt).toContain("Single frame only");
     expect(prompt).toContain("No typography");
-    expect(prompt).toContain("No invented awards");
+    expect(prompt).toContain("Do not invent awards");
     expect(prompt).toContain("TMG Launchpad");
     expect(prompt).toContain("#111827");
     expect(prompt).not.toContain("Synthetic marketing video prompt");
