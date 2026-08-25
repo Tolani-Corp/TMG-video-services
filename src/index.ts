@@ -199,5 +199,6 @@ export { IngestionWorkflow } from "./workflow";
 export { ImageProcessingWorkflow } from "./image-workflow";
 export { ProductionWorkflow } from "./production-workflow";
 export { RevocationWorkflow } from "./revocation-workflow";
+export { StoryboardBrandCompositionWorkflow } from "./storyboard-brand-composition-workflow";
 export { ProductionRequestCoordinator } from "./production-request-coordinator";
 export { TenantUsageLedger } from "./tenant-usage-ledger";
