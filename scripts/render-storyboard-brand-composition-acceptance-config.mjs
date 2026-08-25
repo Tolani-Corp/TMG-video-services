@@ -1,5 +1,6 @@
 import fs from "node:fs";
 
+// Keep this isolated acceptance renderer aligned with the documented v1.1 contract.
 const required = [
   "TMG_STORYBOARD_V11_CONTEXT_WORKER",
   "TMG_STORYBOARD_V11_RENDER_WORKER",
