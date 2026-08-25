@@ -196,3 +196,7 @@ v1.1 does not include:
 - generative recreation of exact logos or screenshots;
 - generative image editing;
 - autonomous approval of creative claims.
+
+## Baseline reconciliation
+
+PR #49 is reconciled against `feature/checklist-production-intake-v1` at `06eaf7383f91e5d86277a4a7ed3a2b6755b46c91`. The richer 10-shot Storyboard & Brand Composition v1.1 contract remains canonical. The baseline duplicate `src/storyboard-brand-composition-workflow.ts` surface is retained only as a compatibility forwarder to `src/storyboard-brand-workflow.ts`; it is not a second implementation or authority path.
