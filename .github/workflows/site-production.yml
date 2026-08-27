@@ -110,7 +110,7 @@ jobs:
           test -s site-worker-registration.json
           test -s backend-worker-registration-post.json
 
-      - name: Verify browser sync, governed intake, and backend isolation
+      - name: Verify browser sync, governed intake, live processing view, and backend isolation
         shell: bash
         run: |
           set -euo pipefail
@@ -120,6 +120,7 @@ jobs:
               if body="$(curl --fail --silent --show-error --max-time 15 "https://${host}/")"; then
                 printf '%s' "$body" | grep -Fq "Tolani Media Group" || { echo "Unexpected homepage content on ${host}" >&2; exit 3; }
                 printf '%s' "$body" | grep -Fq "data-work-request-form" || { echo "Work request UI missing on ${host}" >&2; exit 3; }
+                printf '%s' "$body" | grep -Fq "data-processing-console" || { echo "Live processing console missing on ${host}" >&2; exit 3; }
                 ok="true"
                 break
               fi
@@ -195,6 +196,18 @@ jobs:
           const receipt = JSON.parse(process.env.COMPLETE_BODY ?? "{}");
           if (receipt.schema !== "tmg.work-request-receipt.v1" || receipt.status !== "received_unreviewed" || receipt.nextStep !== "human_review") throw new Error("work request completion receipt mismatch");
           if (receipt.controls?.processingAuthorized !== false || receipt.controls?.publicationAuthorized !== false || receipt.controls?.externalProviderEgressAuthorized !== false) throw new Error("work request receipt expanded authority");
+          NODE
+
+          processing_body="$(curl --fail --silent --show-error --max-time 15 "https://tolanimediagroup.com/work-requests/${request_id}/status" -H "x-work-request-token: ${upload_token}")"
+          PROCESSING_BODY="$processing_body" EXPECTED_REQUEST_ID="$request_id" node --input-type=module - <<'NODE'
+          const status = JSON.parse(process.env.PROCESSING_BODY ?? "{}");
+          if (status.schema !== "tmg.work-request-processing-status.v1") throw new Error("processing status schema mismatch");
+          if (status.requestId !== process.env.EXPECTED_REQUEST_ID || status.status !== "received_unreviewed") throw new Error("processing status request mismatch");
+          if (status.lifecycle?.phase !== "human_review" || status.lifecycle?.state !== "waiting" || status.lifecycle?.progress !== 35) throw new Error("processing lifecycle waiting-state mismatch");
+          if (status.context?.files?.total !== 1 || status.context?.files?.uploaded !== 1) throw new Error("processing file context mismatch");
+          if (status.context?.controls?.processingAuthorized !== false || status.context?.controls?.publicationAuthorized !== false || status.context?.controls?.externalProviderEgressAuthorized !== false) throw new Error("processing view expanded authority");
+          const serialized = JSON.stringify(status);
+          if (serialized.includes("ci-intake@tolanimediagroup.com") || serialized.includes("tokenHash") || serialized.includes("quarantine/")) throw new Error("processing view leaked private intake data");
           NODE
 
           for path in /v1/search /mcp /health; do
