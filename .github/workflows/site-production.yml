@@ -52,34 +52,40 @@ jobs:
           const service = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
           if (site.name !== "tolani-media-group-site") throw new Error("Unexpected public-site Worker name");
           if (site.main !== "src/site.ts") throw new Error("Public site Worker entrypoint must be src/site.ts");
-          if (site.assets?.directory !== "./site" || site.assets?.binding !== "ASSETS") {
-            throw new Error("Public site must deploy ./site through the ASSETS binding");
-          }
+          if (site.assets?.directory !== "./site" || site.assets?.binding !== "ASSETS") throw new Error("Public site must deploy ./site through the ASSETS binding");
           const runWorkerFirst = site.assets?.run_worker_first ?? [];
-          if (JSON.stringify(runWorkerFirst) !== JSON.stringify(["/status.json"])) {
-            throw new Error("Only /status.json may run the public site Worker before assets");
-          }
+          const expectedWorkerFirst = ["/status.json", "/work-requests", "/work-requests/*"];
+          if (JSON.stringify(runWorkerFirst) !== JSON.stringify(expectedWorkerFirst)) throw new Error("Unexpected public Worker dynamic route surface");
           if (site.workers_dev !== false) throw new Error("Public production site must not use workers.dev");
           const bindings = site.services ?? [];
-          if (bindings.length !== 1 || bindings[0]?.binding !== "TMG_BACKEND" || bindings[0]?.service !== "tmg-video-services-production") {
-            throw new Error("Public site must bind only to the private production backend Worker");
-          }
+          if (bindings.length !== 1 || bindings[0]?.binding !== "TMG_BACKEND" || bindings[0]?.service !== "tmg-video-services-production") throw new Error("Public site must bind only to the private production backend Worker");
+          const r2 = site.r2_buckets ?? [];
+          if (r2.length !== 1 || r2[0]?.binding !== "WORK_REQUESTS" || r2[0]?.bucket_name !== "tmg-work-requests-prod") throw new Error("Work request intake must use the dedicated private R2 bucket");
+          const rateLimits = new Map((site.ratelimits ?? []).map((entry) => [entry.name, entry]));
+          if (!rateLimits.has("WORK_REQUEST_START_LIMITER") || !rateLimits.has("WORK_REQUEST_UPLOAD_LIMITER")) throw new Error("Work request rate-limit bindings are missing");
+          if (site.vars?.TMG_WORK_REQUEST_INTAKE_ENABLED !== "true") throw new Error("Work request intake must be explicitly enabled");
           const routes = site.routes ?? [];
           const expected = new Set(["tolanimediagroup.com", "www.tolanimediagroup.com"]);
           if (routes.length !== 2) throw new Error("Public site must declare exactly two custom domains");
           for (const route of routes) {
-            if (route.custom_domain !== true || !expected.delete(route.pattern)) {
-              throw new Error(`Unexpected public-site route: ${JSON.stringify(route)}`);
-            }
+            if (route.custom_domain !== true || !expected.delete(route.pattern)) throw new Error(`Unexpected public-site route: ${JSON.stringify(route)}`);
           }
           if (expected.size !== 0) throw new Error("Missing expected public-site custom domain");
-          if (service.env?.production?.routes || service.env?.production?.route || service.env?.production?.custom_domains) {
-            throw new Error("Governed video-services production Worker must remain unrouted");
-          }
+          if (service.env?.production?.routes || service.env?.production?.route || service.env?.production?.custom_domains) throw new Error("Governed video-services production Worker must remain unrouted");
           for (const flag of ["TMG_PUBLIC_API_ENABLED", "TMG_MCP_ENABLED", "TMG_INGEST_WORKFLOW_ENABLED", "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED"]) {
             if (service.env?.production?.vars?.[flag] !== "false") throw new Error(`${flag} must remain false`);
           }
           NODE
+
+      - name: Ensure private work-request quarantine bucket exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket list > r2-buckets.txt
+          if ! grep -Fq "tmg-work-requests-prod" r2-buckets.txt; then
+            pnpm exec wrangler r2 bucket create tmg-work-requests-prod
+          fi
+          pnpm exec wrangler r2 bucket list | grep -Fq "tmg-work-requests-prod"
 
       - name: Compile site deployment
         run: pnpm exec wrangler deploy --config wrangler.site.jsonc --dry-run --outdir .site-dry-run
@@ -87,7 +93,7 @@ jobs:
       - name: Verify target backend Worker is registered
         run: pnpm exec wrangler deployments status --name tmg-video-services-production --json > backend-worker-registration.json
 
-      - name: Deploy public site, service binding, and custom domains
+      - name: Deploy public site, intake bindings, and custom domains
         run: pnpm exec wrangler deploy --config wrangler.site.jsonc
 
       - name: Verify both Workers are registered
@@ -99,7 +105,7 @@ jobs:
           test -s site-worker-registration.json
           test -s backend-worker-registration-post.json
 
-      - name: Verify browser sync and backend isolation
+      - name: Verify browser sync, governed intake, and backend isolation
         shell: bash
         run: |
           set -euo pipefail
@@ -108,7 +114,7 @@ jobs:
             for attempt in 1 2 3 4 5 6; do
               if body="$(curl --fail --silent --show-error --max-time 15 "https://${host}/")"; then
                 printf '%s' "$body" | grep -Fq "Tolani Media Group" || { echo "Unexpected homepage content on ${host}" >&2; exit 3; }
-                printf '%s' "$body" | grep -Fq "/app.js" || { echo "Browser sync script missing on ${host}" >&2; exit 3; }
+                printf '%s' "$body" | grep -Fq "data-work-request-form" || { echo "Work request UI missing on ${host}" >&2; exit 3; }
                 ok="true"
                 break
               fi
@@ -117,27 +123,7 @@ jobs:
             test "$ok" = "true" || { echo "Site did not become reachable on ${host}" >&2; exit 3; }
           done
 
-          status_ok="false"
-          status_body=""
-          status_code="000"
-          for attempt in 1 2 3 4 5 6 7 8; do
-            response_file="$(mktemp)"
-            status_code="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' --max-time 15 "https://tolanimediagroup.com/status.json" || true)"
-            status_body="$(cat "$response_file")"
-            rm -f "$response_file"
-            if [ "$status_code" = "200" ]; then
-              status_ok="true"
-              break
-            fi
-            echo "status.json attempt ${attempt} returned HTTP ${status_code}; waiting for Worker/Service Binding propagation"
-            sleep 5
-          done
-          if [ "$status_ok" != "true" ]; then
-            echo "status.json never became healthy; final HTTP ${status_code}" >&2
-            printf '%s\n' "$status_body" >&2
-            exit 5
-          fi
-
+          status_body="$(curl --fail --silent --show-error --max-time 15 "https://tolanimediagroup.com/status.json")"
           STATUS_BODY="$status_body" node --input-type=module - <<'NODE'
           const status = JSON.parse(process.env.STATUS_BODY ?? "{}");
           const failures = [];
@@ -146,32 +132,64 @@ jobs:
           if (status.backend?.worker !== "tmg-video-services-production" || status.backend?.status !== "reachable") failures.push("private backend Worker is not reachable through Service Binding");
           if (status.backend?.publicStatusGate !== "G0") failures.push("unexpected public product gate");
           if (!["ui-bootstrap-v1", "health-v1"].includes(status.backend?.syncContract)) failures.push("unsupported backend sync contract");
-          for (const flag of ["publicApiEnabled", "mcpEnabled"]) {
-            if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
-          }
+          for (const flag of ["publicApiEnabled", "mcpEnabled"]) if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
           if (status.backend?.syncContract === "ui-bootstrap-v1") {
-            for (const flag of ["ingestWorkflowEnabled", "externalProviderEgressEnabled"]) {
-              if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
-            }
-            for (const flag of ["activationAuthorized", "publicApiAuthorized", "mcpAuthorized", "ingestionAuthorized", "externalProviderEgressAuthorized", "commercialUseAuthorized"]) {
-              if (status.release?.[flag] !== false) failures.push(`${flag} unexpectedly authorized`);
-            }
+            for (const flag of ["ingestWorkflowEnabled", "externalProviderEgressEnabled"]) if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
+            for (const flag of ["activationAuthorized", "publicApiAuthorized", "mcpAuthorized", "ingestionAuthorized", "externalProviderEgressAuthorized", "commercialUseAuthorized"]) if (status.release?.[flag] !== false) failures.push(`${flag} unexpectedly authorized`);
           } else {
             if (status.runtime?.ingestWorkflowEnabled !== null) failures.push("health-v1 must not invent ingestion runtime state");
             if (status.runtime?.externalProviderEgressEnabled !== null) failures.push("health-v1 must not invent provider-egress runtime state");
             if (status.release !== null) failures.push("health-v1 must not invent release-authority state");
           }
           if (failures.length) throw new Error(failures.join("; "));
-          console.log(JSON.stringify({
-            schema: status.schema,
-            siteWorker: status.site.worker,
-            backendWorker: status.backend.worker,
-            backendStatus: status.backend.status,
-            syncContract: status.backend.syncContract,
-            publicStatusGate: status.backend.publicStatusGate,
-            policyVersion: status.backend.policyVersion,
-            synchronizedAt: status.synchronizedAt,
-          }, null, 2));
+          NODE
+
+          config_body="$(curl --fail --silent --show-error --max-time 15 "https://tolanimediagroup.com/work-requests/config")"
+          CONFIG_BODY="$config_body" node --input-type=module - <<'NODE'
+          const config = JSON.parse(process.env.CONFIG_BODY ?? "{}");
+          if (config.schema !== "tmg.work-request-intake-config.v1" || config.enabled !== true) throw new Error("work request intake is not enabled");
+          if (config.posture !== "private_quarantine_human_review" || config.processingAuthorized !== false || config.publicationAuthorized !== false) throw new Error("work request intake authority boundary mismatch");
+          if (config.maxFiles !== 5 || config.maxFileBytes !== 52428800 || config.maxTotalBytes !== 157286400) throw new Error("work request intake size contract mismatch");
+          NODE
+
+          fixture="$(mktemp)"
+          printf 'TMG governed intake CI fixture\n' > "$fixture"
+          fixture_size="$(wc -c < "$fixture" | tr -d ' ')"
+          fixture_sha="$(sha256sum "$fixture" | awk '{print $1}')"
+          start_payload="$(node --input-type=module - "$fixture_size" "$fixture_sha" <<'NODE'
+          const [size, sha] = process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            requester: { name: "TMG CI", email: "ci-intake@tolanimediagroup.com", organization: "Tolani Media Group" },
+            request: { serviceType: "content-analysis", title: "Production intake acceptance", description: "Automated harmless production acceptance fixture.", desiredOutcome: "Prove quarantined upload and receipt behavior.", targetDate: "" },
+            authorizedToShare: true,
+            humanReviewAcknowledged: true,
+            files: [{ name: "tmg-ci-fixture.txt", size: Number(size), type: "text/plain", sha256: sha }],
+          }));
+          NODE
+          )"
+          start_body="$(curl --fail --silent --show-error --max-time 15 -X POST "https://tolanimediagroup.com/work-requests" -H 'content-type: application/json' --data-binary "$start_payload")"
+          request_id="$(START_BODY="$start_body" node --input-type=module -e 'process.stdout.write(JSON.parse(process.env.START_BODY).requestId)')"
+          upload_token="$(START_BODY="$start_body" node --input-type=module -e 'process.stdout.write(JSON.parse(process.env.START_BODY).uploadToken)')"
+          file_id="$(START_BODY="$start_body" node --input-type=module -e 'process.stdout.write(JSON.parse(process.env.START_BODY).files[0].fileId)')"
+          cleanup() {
+            pnpm exec wrangler r2 object delete "tmg-work-requests-prod/quarantine/${request_id}/files/${file_id}" --remote >/dev/null 2>&1 || true
+            pnpm exec wrangler r2 object delete "tmg-work-requests-prod/requests/${request_id}/manifest.json" --remote >/dev/null 2>&1 || true
+            rm -f "$fixture"
+          }
+          trap cleanup EXIT
+
+          upload_body="$(curl --fail --silent --show-error --max-time 30 -X PUT "https://tolanimediagroup.com/work-requests/${request_id}/files/${file_id}" -H 'content-type: text/plain' -H "x-work-request-token: ${upload_token}" --data-binary @"$fixture")"
+          UPLOAD_BODY="$upload_body" EXPECTED_SHA="$fixture_sha" node --input-type=module - <<'NODE'
+          const upload = JSON.parse(process.env.UPLOAD_BODY ?? "{}");
+          if (upload.schema !== "tmg.work-request-file-receipt.v1" || upload.status !== "uploaded_quarantine") throw new Error("file upload receipt mismatch");
+          if (upload.sha256 !== process.env.EXPECTED_SHA) throw new Error("file SHA-256 receipt mismatch");
+          NODE
+
+          complete_body="$(curl --fail --silent --show-error --max-time 15 -X POST "https://tolanimediagroup.com/work-requests/${request_id}/complete" -H "x-work-request-token: ${upload_token}")"
+          COMPLETE_BODY="$complete_body" node --input-type=module - <<'NODE'
+          const receipt = JSON.parse(process.env.COMPLETE_BODY ?? "{}");
+          if (receipt.schema !== "tmg.work-request-receipt.v1" || receipt.status !== "received_unreviewed" || receipt.nextStep !== "human_review") throw new Error("work request completion receipt mismatch");
+          if (receipt.controls?.processingAuthorized !== false || receipt.controls?.publicationAuthorized !== false || receipt.controls?.externalProviderEgressAuthorized !== false) throw new Error("work request receipt expanded authority");
           NODE
 
           for path in /v1/search /mcp /health; do
