@@ -96,6 +96,28 @@ async function sha256Hex(value: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function startEmptyRequest(env: ReturnType<typeof makeEnv>["env"]) {
+  const response = await siteWorker.fetch(new Request("https://tolanimediagroup.com/work-requests", {
+    method: "POST",
+    headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.22" },
+    body: JSON.stringify({
+      requester: { name: "Live View Tester", email: "live@example.com", organization: "Example" },
+      request: {
+        serviceType: "video-intelligence",
+        title: "Live workflow view",
+        description: "Exercise the authenticated live processing status contract.",
+        desiredOutcome: "Show a safe processing outcome with evidence context.",
+        targetDate: "",
+      },
+      authorizedToShare: true,
+      humanReviewAcknowledged: true,
+      files: [],
+    }),
+  }), env);
+  expect(response.status).toBe(201);
+  return response.json() as Promise<{ requestId: string; uploadToken: string; files: Array<{ fileId: string }> }>;
+}
+
 describe("Tolani Media Group public-site Worker sync", () => {
   it("sanitizes backend bootstrap data for same-origin browser status", async () => {
     const backendFetch = vi.fn(async () => Response.json(backendBootstrap()));
@@ -238,6 +260,106 @@ describe("Tolani Media Group public-site Worker sync", () => {
       nextStep: "human_review",
       controls: { processingAuthorized: false, publicationAuthorized: false, externalProviderEgressAuthorized: false },
     });
+  });
+
+  it("returns an authenticated sanitized live processing view and reflects recorded workflow outcome context", async () => {
+    const { env, bucket } = makeEnv();
+    const start = await startEmptyRequest(env);
+    const completeResponse = await siteWorker.fetch(new Request(`https://tolanimediagroup.com/work-requests/${start.requestId}/complete`, {
+      method: "POST",
+      headers: { "x-work-request-token": start.uploadToken },
+    }), env);
+    expect(completeResponse.status).toBe(200);
+
+    const waitingResponse = await siteWorker.fetch(new Request(`https://tolanimediagroup.com/work-requests/${start.requestId}/status`, {
+      headers: { "x-work-request-token": start.uploadToken },
+    }), env);
+    expect(waitingResponse.status).toBe(200);
+    await expect(waitingResponse.json()).resolves.toMatchObject({
+      schema: "tmg.work-request-processing-status.v1",
+      requestId: start.requestId,
+      status: "received_unreviewed",
+      lifecycle: {
+        phase: "human_review",
+        state: "waiting",
+        progress: 35,
+        headline: "Awaiting human review",
+      },
+      context: {
+        files: { total: 0, uploaded: 0 },
+        controls: { processingAuthorized: false, publicationAuthorized: false, externalProviderEgressAuthorized: false },
+      },
+    });
+
+    const denied = await siteWorker.fetch(new Request(`https://tolanimediagroup.com/work-requests/${start.requestId}/status`, {
+      headers: { "x-work-request-token": "wrong-token" },
+    }), env);
+    expect(denied.status).toBe(404);
+
+    const key = `requests/${start.requestId}/manifest.json`;
+    const stored = bucket.store.get(key);
+    expect(stored).toBeDefined();
+    const manifest = JSON.parse(new TextDecoder().decode(stored!.body));
+    manifest.status = "processing";
+    manifest.controls.processingAuthorized = true;
+    manifest.workflow = {
+      phase: "scene_analysis",
+      progress: 73,
+      headline: "Analyzing approved media segments",
+      summary: "Three governed analysis steps have completed and the current evidence pass is active.",
+      secretShouldNeverEscape: "private-workflow-control",
+      events: [
+        { id: "evt-1", at: "2026-08-27T21:30:00.000Z", phase: "processing", state: "complete", title: "Source integrity verified", detail: "Checksum and source envelope matched the approved request." },
+        { id: "evt-2", at: "2026-08-27T21:31:00.000Z", phase: "scene_analysis", state: "active", title: "Scene analysis running", detail: "Authorized analysis is processing the bounded source set." },
+      ],
+      outcome: {
+        status: "provisional",
+        headline: "Preliminary signal detected",
+        summary: "The workflow has identified candidate moments for human review.",
+        confidence: "moderate",
+        nextAction: "Wait for the evidence pass to complete before reviewing deliverables.",
+        evidence: [{ label: "Segments evaluated", value: "12" }],
+        deliverables: [{ label: "Review package", status: "building" }],
+        internalPath: "r2://must-not-escape",
+      },
+    };
+    const encoded = new TextEncoder().encode(JSON.stringify(manifest));
+    bucket.store.set(key, { body: encoded, size: encoded.byteLength, etag: stored!.etag });
+
+    const processingResponse = await siteWorker.fetch(new Request(`https://tolanimediagroup.com/work-requests/${start.requestId}/status`, {
+      headers: { "x-work-request-token": start.uploadToken },
+    }), env);
+    expect(processingResponse.status).toBe(200);
+    const processing = await processingResponse.json() as Record<string, unknown>;
+    expect(processing).toMatchObject({
+      status: "processing",
+      lifecycle: {
+        phase: "scene_analysis",
+        state: "active",
+        progress: 73,
+        headline: "Analyzing approved media segments",
+      },
+      context: {
+        controls: { processingAuthorized: true, publicationAuthorized: false, externalProviderEgressAuthorized: false },
+      },
+      events: [
+        { id: "evt-1", title: "Source integrity verified", state: "complete" },
+        { id: "evt-2", title: "Scene analysis running", state: "active" },
+      ],
+      outcome: {
+        status: "provisional",
+        headline: "Preliminary signal detected",
+        confidence: "moderate",
+        evidence: [{ label: "Segments evaluated", value: "12" }],
+        deliverables: [{ label: "Review package", status: "building" }],
+      },
+    });
+    const serialized = JSON.stringify(processing);
+    expect(serialized).not.toContain("private-workflow-control");
+    expect(serialized).not.toContain("r2://must-not-escape");
+    expect(serialized).not.toContain("live@example.com");
+    expect(serialized).not.toContain("tokenHash");
+    expect(serialized).not.toContain(start.uploadToken);
   });
 
   it("rejects work requests without rights and human-review attestations", async () => {
