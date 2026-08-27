@@ -29,6 +29,18 @@ function backendBootstrap() {
   };
 }
 
+function backendHealth() {
+  return {
+    ok: true,
+    service: "tmg-video-services",
+    publicStatusGate: "G0",
+    policyVersion: "2026-08-20.v3",
+    publicApiEnabled: false,
+    mcpEnabled: false,
+    internalOnly: "must-not-escape",
+  };
+}
+
 describe("Tolani Media Group public-site Worker sync", () => {
   it("sanitizes backend bootstrap data for same-origin browser status", async () => {
     const backendFetch = vi.fn(async () => Response.json(backendBootstrap()));
@@ -53,6 +65,7 @@ describe("Tolani Media Group public-site Worker sync", () => {
         service: "tmg-video-services",
         publicStatusGate: "G0",
         policyVersion: "2026-08-20.v3",
+        syncContract: "ui-bootstrap-v1",
       },
       runtime: {
         publicApiEnabled: false,
@@ -70,6 +83,39 @@ describe("Tolani Media Group public-site Worker sync", () => {
     const serialized = JSON.stringify(status);
     expect(serialized).not.toContain("do-not-publish");
     expect(serialized).not.toContain("internal-request-id");
+  });
+
+  it("falls back to the deployed health contract without inventing unavailable runtime fields", async () => {
+    const backendFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname === "/v1/ui/bootstrap") return new Response("not found", { status: 404 });
+      if (url.pathname === "/health") return Response.json(backendHealth());
+      return new Response("unexpected", { status: 500 });
+    });
+
+    const response = await siteWorker.fetch(new Request("https://tolanimediagroup.com/status.json"), {
+      ASSETS: { fetch: vi.fn(async () => new Response("asset")) },
+      TMG_BACKEND: { fetch: backendFetch },
+    });
+
+    expect(response.status).toBe(200);
+    expect(backendFetch).toHaveBeenCalledTimes(2);
+    await expect(response.json()).resolves.toMatchObject({
+      schema: "tmg.public-status.v1",
+      backend: {
+        status: "reachable",
+        worker: "tmg-video-services-production",
+        syncContract: "health-v1",
+        publicStatusGate: "G0",
+      },
+      runtime: {
+        publicApiEnabled: false,
+        mcpEnabled: false,
+        ingestWorkflowEnabled: null,
+        externalProviderEgressEnabled: null,
+      },
+      release: null,
+    });
   });
 
   it("fails closed when the private backend binding is unavailable", async () => {
