@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "src/site.ts"
       - "wrangler.site.jsonc"
       - ".github/workflows/site-production.yml"
   workflow_dispatch:
@@ -50,9 +51,19 @@ jobs:
           const site = JSON.parse(fs.readFileSync("wrangler.site.jsonc", "utf8"));
           const service = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
           if (site.name !== "tolani-media-group-site") throw new Error("Unexpected public-site Worker name");
-          if (site.main) throw new Error("Public site must remain assets-only");
-          if (site.assets?.directory !== "./site") throw new Error("Public site must deploy only ./site assets");
+          if (site.main !== "src/site.ts") throw new Error("Public site Worker entrypoint must be src/site.ts");
+          if (site.assets?.directory !== "./site" || site.assets?.binding !== "ASSETS") {
+            throw new Error("Public site must deploy ./site through the ASSETS binding");
+          }
+          const runWorkerFirst = site.assets?.run_worker_first ?? [];
+          if (JSON.stringify(runWorkerFirst) !== JSON.stringify(["/status.json"])) {
+            throw new Error("Only /status.json may run the public site Worker before assets");
+          }
           if (site.workers_dev !== false) throw new Error("Public production site must not use workers.dev");
+          const bindings = site.services ?? [];
+          if (bindings.length !== 1 || bindings[0]?.binding !== "TMG_BACKEND" || bindings[0]?.service !== "tmg-video-services-production") {
+            throw new Error("Public site must bind only to the private production backend Worker");
+          }
           const routes = site.routes ?? [];
           const expected = new Set(["tolanimediagroup.com", "www.tolanimediagroup.com"]);
           if (routes.length !== 2) throw new Error("Public site must declare exactly two custom domains");
@@ -73,10 +84,22 @@ jobs:
       - name: Compile site deployment
         run: pnpm exec wrangler deploy --config wrangler.site.jsonc --dry-run --outdir .site-dry-run
 
-      - name: Deploy public site and custom domains
+      - name: Verify target backend Worker is registered
+        run: pnpm exec wrangler deployments status --name tmg-video-services-production --json > backend-worker-registration.json
+
+      - name: Deploy public site, service binding, and custom domains
         run: pnpm exec wrangler deploy --config wrangler.site.jsonc
 
-      - name: Verify public domain and backend isolation
+      - name: Verify both Workers are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deployments status --name tolani-media-group-site --json > site-worker-registration.json
+          pnpm exec wrangler deployments status --name tmg-video-services-production --json > backend-worker-registration-post.json
+          test -s site-worker-registration.json
+          test -s backend-worker-registration-post.json
+
+      - name: Verify browser sync and backend isolation
         shell: bash
         run: |
           set -euo pipefail
@@ -85,6 +108,7 @@ jobs:
             for attempt in 1 2 3 4 5 6; do
               if body="$(curl --fail --silent --show-error --max-time 15 "https://${host}/")"; then
                 printf '%s' "$body" | grep -Fq "Tolani Media Group" || { echo "Unexpected homepage content on ${host}" >&2; exit 3; }
+                printf '%s' "$body" | grep -Fq "/app.js" || { echo "Browser sync script missing on ${host}" >&2; exit 3; }
                 ok="true"
                 break
               fi
@@ -93,10 +117,36 @@ jobs:
             test "$ok" = "true" || { echo "Site did not become reachable on ${host}" >&2; exit 3; }
           done
 
+          status_body="$(curl --fail --silent --show-error --max-time 15 "https://tolanimediagroup.com/status.json")"
+          STATUS_BODY="$status_body" node --input-type=module - <<'NODE'
+          const status = JSON.parse(process.env.STATUS_BODY ?? "{}");
+          const failures = [];
+          if (status.schema !== "tmg.public-status.v1") failures.push("status schema mismatch");
+          if (status.site?.worker !== "tolani-media-group-site" || status.site?.status !== "ok") failures.push("public site Worker not synchronized");
+          if (status.backend?.worker !== "tmg-video-services-production" || status.backend?.status !== "reachable") failures.push("private backend Worker is not reachable through Service Binding");
+          if (status.backend?.publicStatusGate !== "G0") failures.push("unexpected public product gate");
+          for (const flag of ["publicApiEnabled", "mcpEnabled", "ingestWorkflowEnabled", "externalProviderEgressEnabled"]) {
+            if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
+          }
+          for (const flag of ["activationAuthorized", "publicApiAuthorized", "mcpAuthorized", "ingestionAuthorized", "externalProviderEgressAuthorized", "commercialUseAuthorized"]) {
+            if (status.release?.[flag] !== false) failures.push(`${flag} unexpectedly authorized`);
+          }
+          if (failures.length) throw new Error(failures.join("; "));
+          console.log(JSON.stringify({
+            schema: status.schema,
+            siteWorker: status.site.worker,
+            backendWorker: status.backend.worker,
+            backendStatus: status.backend.status,
+            publicStatusGate: status.backend.publicStatusGate,
+            policyVersion: status.backend.policyVersion,
+            synchronizedAt: status.synchronizedAt,
+          }, null, 2));
+          NODE
+
           for path in /v1/search /mcp /health; do
-            status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 15 "https://tolanimediagroup.com${path}")"
-            case "$status" in
+            http_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 15 "https://tolanimediagroup.com${path}")"
+            case "$http_status" in
               404) ;;
-              *) echo "Public static site unexpectedly exposed ${path} with HTTP ${status}" >&2; exit 4 ;;
+              *) echo "Public site unexpectedly exposed ${path} with HTTP ${http_status}" >&2; exit 4 ;;
             esac
           done
