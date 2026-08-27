@@ -3,7 +3,7 @@ import reviewWorker from "../src/work-review";
 
 type Stored = { body: Uint8Array; size: number; etag: string };
 
-function fixtureManifest(status = "received_unreviewed") {
+function fixtureManifest(status = "received_unreviewed", serviceType = "content-analysis") {
   return {
     schema: "tmg.work-request.v1",
     requestId: "wr_20260827_11111111-1111-4111-8111-111111111111",
@@ -12,7 +12,7 @@ function fixtureManifest(status = "received_unreviewed") {
     updatedAt: "2026-08-27T20:05:00.000Z",
     requester: { name: "Client", email: "client@example.com", organization: "Example" },
     request: {
-      serviceType: "content-analysis",
+      serviceType,
       title: "Analyze evidence",
       description: "Review supplied evidence under the stated scope.",
       desiredOutcome: "Produce an evidence-grounded assessment.",
@@ -49,6 +49,7 @@ function makeBucket() {
         etag: item.etag,
         body: new Blob([Uint8Array.from(item.body)]).stream(),
         text: async () => new TextDecoder().decode(item.body),
+        arrayBuffer: async () => Uint8Array.from(item.body).buffer,
       };
     }),
     head: vi.fn(async (key: string) => {
@@ -82,19 +83,23 @@ function makeContext(authenticated = true) {
   } : {};
 }
 
-function makeEnv() {
+function makeEnv(serviceType = "content-analysis") {
   const bucket = makeBucket();
-  const manifest = fixtureManifest();
+  const manifest = fixtureManifest("received_unreviewed", serviceType);
   const key = `requests/${manifest.requestId}/manifest.json`;
   bucket.putText(key, JSON.stringify(manifest));
   bucket.putText(manifest.files[0]!.objectKey, "evidence");
   const workflowCreate = vi.fn(async (options: { id?: string }) => ({ id: options.id ?? "generated" }));
+  const workflowSendEvent = vi.fn(async () => undefined);
+  const workflowGet = vi.fn(async (id: string) => ({ id, sendEvent: workflowSendEvent }));
   return {
     bucket,
     workflowCreate,
+    workflowGet,
+    workflowSendEvent,
     env: {
       WORK_REQUESTS: bucket.api,
-      WORK_REQUEST_PROCESSOR: { create: workflowCreate },
+      WORK_REQUEST_PROCESSOR: { create: workflowCreate, get: workflowGet },
       TMG_REVIEW_ALLOWED_EMAIL_DOMAINS: "",
     },
     requestId: manifest.requestId,
@@ -141,7 +146,7 @@ describe("TMG work request review console", () => {
     expect(body).not.toContain("quarantine/private/object");
   });
 
-  it("requires a human review transition before granting processing authority", async () => {
+  it("requires a human review transition before granting request-processing authority", async () => {
     const { env, workflowCreate, requestId, bucket, key } = makeEnv();
     const premature = await reviewWorker.fetch(
       mutation(`/api/requests/${requestId}/approve`, { note: "Approved after evidence review." }),
@@ -159,7 +164,7 @@ describe("TMG work request review console", () => {
     expect(review.status).toBe(200);
 
     const approved = await reviewWorker.fetch(
-      mutation(`/api/requests/${requestId}/approve`, { note: "Rights and requested scope reviewed; bounded processing is approved." }),
+      mutation(`/api/requests/${requestId}/approve`, { note: "Rights and requested scope reviewed; bounded request processing is approved." }),
       env as never,
       makeContext() as never,
     );
@@ -173,8 +178,83 @@ describe("TMG work request review console", () => {
       publicationAuthorized: false,
       externalProviderEgressAuthorized: false,
     });
+    expect(manifest.processorAuthorizations).toEqual({});
     expect(manifest.review).toMatchObject({ state: "approved", reviewerEmail: "operator@tolanicorp.us" });
     expect(manifest.workflow.instanceId).toMatch(/^work_/);
+  });
+
+  it("grants a separate exact local processor authority and sends it to the same workflow instance", async () => {
+    const { env, requestId, bucket, key, workflowGet, workflowSendEvent } = makeEnv("rights-provenance");
+    const manifest = fixtureManifest("action_required", "rights-provenance");
+    manifest.controls.processingAuthorized = true;
+    (manifest as typeof manifest & { review: Record<string, unknown>; workflow: Record<string, unknown> }).review = {
+      state: "approved",
+      reviewId: "review_33333333-3333-4333-8333-333333333333",
+      reviewerEmail: "operator@tolanicorp.us",
+      note: "Request processing approved.",
+      at: "2026-08-27T20:06:00.000Z",
+    };
+    (manifest as typeof manifest & { workflow: Record<string, unknown> }).workflow = {
+      instanceId: "work_exact_instance",
+      dispatchState: "waiting_for_processor_authority",
+      processorId: "rights-provenance",
+      processorState: "processor_authorization_required",
+      processorAuthorizationState: "required",
+      progress: 82,
+      events: [],
+    };
+    bucket.putText(key, JSON.stringify(manifest));
+
+    const response = await reviewWorker.fetch(
+      mutation(`/api/requests/${requestId}/authorize-processor`, {
+        processorId: "rights-provenance",
+        note: "Authorize only the local structural rights evidence verifier for this exact evidence set.",
+      }),
+      env as never,
+      makeContext() as never,
+    );
+    expect(response.status).toBe(200);
+    expect(workflowGet).toHaveBeenCalledWith("work_exact_instance");
+    expect(workflowSendEvent).toHaveBeenCalledTimes(1);
+    expect(workflowSendEvent.mock.calls[0]?.[0]).toMatchObject({ type: "processor-authorized" });
+
+    const stored = JSON.parse(new TextDecoder().decode(bucket.store.get(key)!.body));
+    const authority = stored.processorAuthorizations["rights-provenance"];
+    expect(authority).toMatchObject({
+      schema: "tmg.processor-authority.v1",
+      processorId: "rights-provenance",
+      state: "authorized",
+      requestId,
+      workflowInstanceId: "work_exact_instance",
+      localExecutionOnly: true,
+      publicationAuthorized: false,
+      externalProviderEgressAuthorized: false,
+    });
+    expect(authority.evidenceBindings).toEqual([{ fileId: manifest.files[0]!.fileId, sha256: manifest.files[0]!.sha256, size: 8 }]);
+  });
+
+  it("does not let a local processor route bypass execution with a manual outcome", async () => {
+    const { env, requestId, bucket, key } = makeEnv("media-processing");
+    const manifest = fixtureManifest("action_required", "media-processing");
+    manifest.controls.processingAuthorized = true;
+    (manifest as typeof manifest & { workflow: Record<string, unknown> }).workflow = {
+      processorId: "media-inspection",
+      processorAuthorizationState: "required",
+      progress: 82,
+      events: [],
+    };
+    bucket.putText(key, JSON.stringify(manifest));
+
+    const response = await reviewWorker.fetch(
+      mutation(`/api/requests/${requestId}/outcome`, { status: "completed", headline: "Done", summary: "Completed." }),
+      env as never,
+      makeContext() as never,
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "processor_execution_required_before_outcome",
+      processorId: "media-inspection",
+    });
   });
 
   it("denies cross-origin mutations even for an authenticated operator", async () => {
@@ -208,7 +288,7 @@ describe("TMG work request review console", () => {
     expect(manifest.workflow.outcome.status).toBe("rejected");
   });
 
-  it("allows a terminal outcome only after the workflow reaches an action-required checkpoint", async () => {
+  it("allows a terminal outcome at a non-locally-authorizable checkpoint", async () => {
     const { env, requestId, bucket, key } = makeEnv();
     const denied = await reviewWorker.fetch(
       mutation(`/api/requests/${requestId}/outcome`, { status: "completed", headline: "Done", summary: "Completed." }),
@@ -217,10 +297,11 @@ describe("TMG work request review console", () => {
     );
     expect(denied.status).toBe(409);
 
-    const manifest = fixtureManifest("action_required");
+    const manifest = fixtureManifest("action_required", "content-analysis");
     manifest.controls.processingAuthorized = true;
     (manifest as typeof manifest & { workflow: Record<string, unknown> }).workflow = {
       progress: 82,
+      processorId: "content-analysis",
       events: [],
       outcome: { evidence: [{ label: "Evidence objects verified", value: "1" }], deliverables: [] },
     };
