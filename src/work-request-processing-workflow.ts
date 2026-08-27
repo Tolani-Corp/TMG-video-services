@@ -11,7 +11,11 @@ import {
   type ProcessorAuthorizationEvent,
   type ReviewEnv,
 } from "./work-review-core";
-import { executeAuthorizedProcessor, validateProcessorAuthority } from "./processor-authority";
+import { executeAuthorizedProcessor, validateProcessorAuthority, type ProcessorExecutionResult } from "./processor-authority";
+
+type SerializedExecution =
+  | { ok: true; result: ProcessorExecutionResult; error: null }
+  | { ok: false; result: null; error: string };
 
 export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv, DispatchPayload> {
   async run(event: WorkflowEvent<DispatchPayload>, step: WorkflowStep): Promise<{ requestId: string; status: string; processorId?: string }> {
@@ -145,10 +149,11 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
 
     let authorizationEvent: ProcessorAuthorizationEvent;
     try {
-      authorizationEvent = await step.waitForEvent<ProcessorAuthorizationEvent>(
+      const receivedEvent = await step.waitForEvent<ProcessorAuthorizationEvent>(
         "wait for explicit processor authority",
         { type: "processor-authorized", timeout: "7 days" },
       );
+      authorizationEvent = receivedEvent.payload;
     } catch {
       await step.do("record processor authority timeout", async () => {
         const manifest = await loadManifest(this.env, payload.requestId);
@@ -231,16 +236,23 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
       return { requestId: payload.requestId, status: "action_required", processorId: route.processorId };
     }
 
-    const execution = await step.do("execute authorized local processor adapter", async () => {
+    const executionJson = await step.do("execute authorized local processor adapter", async () => {
+      let execution: SerializedExecution;
       try {
         const manifest = await loadManifest(this.env, payload.requestId);
         if (!manifest) throw new Error("work_request_not_found");
         const result = await executeAuthorizedProcessor(this.env, manifest, route);
-        return { ok: true as const, result };
+        execution = { ok: true, result, error: null };
       } catch (error) {
-        return { ok: false as const, error: error instanceof Error ? error.message : "unknown_processor_failure" };
+        execution = {
+          ok: false,
+          result: null,
+          error: error instanceof Error ? error.message : "unknown_processor_failure",
+        };
       }
+      return JSON.stringify(execution);
     });
+    const execution = JSON.parse(executionJson) as SerializedExecution;
 
     if (!execution.ok) {
       await step.do("record local processor failure", async () => {
@@ -274,6 +286,7 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
       return { requestId: payload.requestId, status: "action_required", processorId: route.processorId };
     }
 
+    const processorResult = execution.result;
     await step.do("record processor result and return to human checkpoint", async () => {
       const manifest = await loadManifest(this.env, payload.requestId);
       if (!manifest) throw new Error("work_request_not_found");
@@ -288,11 +301,11 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
         adapter: route.adapter,
         authorityId: authorityValidation.authorityId,
         executedAt: new Date().toISOString(),
-        status: execution.result.status,
-        headline: execution.result.headline,
-        summary: execution.result.summary,
-        confidence: execution.result.confidence,
-        details: execution.result.details,
+        status: processorResult.status,
+        headline: processorResult.headline,
+        summary: processorResult.summary,
+        confidence: processorResult.confidence,
+        details: processorResult.details,
       };
       workflow.processorResults = results;
       manifest.status = "action_required";
@@ -300,29 +313,29 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
       workflow.processorState = "local_adapter_complete";
       workflow.processorAuthorizationState = "consumed";
       workflow.phase = "action_required";
-      workflow.progress = execution.result.progress;
-      workflow.headline = execution.result.headline;
-      workflow.summary = execution.result.summary;
+      workflow.progress = processorResult.progress;
+      workflow.headline = processorResult.headline;
+      workflow.summary = processorResult.summary;
       workflow.outcome = {
-        status: execution.result.status,
-        headline: execution.result.headline,
-        summary: execution.result.summary,
-        nextAction: execution.result.nextAction,
-        confidence: execution.result.confidence,
-        evidence: execution.result.evidence,
-        deliverables: execution.result.deliverables,
+        status: processorResult.status,
+        headline: processorResult.headline,
+        summary: processorResult.summary,
+        nextAction: processorResult.nextAction,
+        confidence: processorResult.confidence,
+        evidence: processorResult.evidence,
+        deliverables: processorResult.deliverables,
       };
       appendEvent(manifest, {
         phase: "processing",
         state: "complete",
         title: `${route.processorId} local adapter completed`,
-        detail: execution.result.summary,
+        detail: processorResult.summary,
       });
       appendEvent(manifest, {
         phase: "action_required",
         state: "checkpoint",
         title: "Processor result returned to human checkpoint",
-        detail: execution.result.nextAction,
+        detail: processorResult.nextAction,
       });
       await writeManifest(this.env, manifest);
     });
