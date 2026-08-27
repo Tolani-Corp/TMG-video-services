@@ -70,6 +70,81 @@
         <div class="receipt" data-receipt hidden aria-live="polite"></div>
       </form>
     </section>
+
+    <section class="processing-console section-shell" data-processing-console data-processing-state="waiting" hidden aria-labelledby="processing-title">
+      <div class="processing-window">
+        <div class="processing-window-bar">
+          <div class="processing-window-title">
+            <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>TMG live workflow</span>
+          </div>
+          <div class="live-indicator"><span class="live-dot" aria-hidden="true"></span><strong data-processing-live>Connecting to live workflow status…</strong></div>
+        </div>
+
+        <div class="processing-hero">
+          <div class="processing-orbit" data-processing-ring aria-hidden="true">
+            <div class="orbit-ring orbit-ring-one"></div>
+            <div class="orbit-ring orbit-ring-two"></div>
+            <div class="orbit-core"><strong data-processing-percent>0%</strong><span data-processing-phase>waiting</span></div>
+          </div>
+          <div class="processing-copy">
+            <p class="section-kicker">Live request processing</p>
+            <h2 id="processing-title" data-processing-headline>Connecting to governed workflow telemetry.</h2>
+            <p data-processing-summary>Authenticated workflow context will appear here as the request advances.</p>
+            <div class="processing-reference"><span>Reference</span><code data-processing-reference>—</code></div>
+          </div>
+        </div>
+
+        <ol class="stage-rail" aria-label="Request lifecycle">
+          <li data-processing-stage="intake" data-stage-state="pending"><span class="stage-node">1</span><div><strong>Intake</strong><small data-stage-state>Pending</small></div></li>
+          <li data-processing-stage="review" data-stage-state="pending"><span class="stage-node">2</span><div><strong>Human review</strong><small data-stage-state>Pending</small></div></li>
+          <li data-processing-stage="authorization" data-stage-state="pending"><span class="stage-node">3</span><div><strong>Authority</strong><small data-stage-state>Pending</small></div></li>
+          <li data-processing-stage="processing" data-stage-state="pending"><span class="stage-node">4</span><div><strong>Processing</strong><small data-stage-state>Pending</small></div></li>
+          <li data-processing-stage="outcome" data-stage-state="pending"><span class="stage-node">5</span><div><strong>Outcome</strong><small data-stage-state>Pending</small></div></li>
+        </ol>
+
+        <div class="processing-grid">
+          <section class="telemetry-panel" aria-labelledby="telemetry-heading">
+            <div class="panel-heading"><div><p class="section-kicker">Workflow activity</p><h3 id="telemetry-heading">Evidence-backed event stream</h3></div><span class="scan-state">Live</span></div>
+            <ol class="event-stream" data-processing-events aria-live="polite"></ol>
+          </section>
+
+          <aside class="context-panel" aria-label="Processing context">
+            <div class="panel-heading"><div><p class="section-kicker">Control context</p><h3>Current authority</h3></div></div>
+            <dl class="context-grid">
+              <div><dt>Files</dt><dd data-processing-files>—</dd></div>
+              <div><dt>Processing</dt><dd data-processing-authority>Gated</dd></div>
+              <div><dt>Publication</dt><dd data-processing-publication>Gated</dd></div>
+              <div><dt>Provider egress</dt><dd data-processing-egress>Gated</dd></div>
+              <div class="span-all"><dt>Last update</dt><dd data-processing-updated>—</dd></div>
+            </dl>
+          </aside>
+        </div>
+
+        <section class="outcome-panel" data-processing-outcome hidden aria-labelledby="outcome-heading">
+          <div class="outcome-copy">
+            <p class="section-kicker">Outcome context</p>
+            <h3 id="outcome-heading" data-outcome-headline>Outcome pending</h3>
+            <p data-outcome-summary>No outcome has been recorded yet.</p>
+            <p class="next-action" data-outcome-next-action hidden></p>
+          </div>
+          <div class="outcome-columns">
+            <div><strong>Evidence</strong><ul data-outcome-evidence></ul></div>
+            <div><strong>Deliverables</strong><ul data-outcome-deliverables></ul></div>
+          </div>
+        </section>
+
+        <div class="processing-actions" aria-label="Processing view actions">
+          <button class="button button-secondary" type="button" data-processing-pause>Pause live updates</button>
+          <button class="button button-secondary" type="button" data-processing-refresh>Refresh now</button>
+          <button class="button button-secondary" type="button" data-processing-copy>Copy reference</button>
+          <button class="button button-secondary" type="button" data-processing-download>Download snapshot</button>
+          <a class="button button-primary" href="#work-request" data-processing-new-request>Start another request</a>
+        </div>
+        <p class="processing-disclaimer">This view reflects recorded workflow evidence only. It does not grant processing, provider, publication, or commercial authority.</p>
+      </div>
+    </section>
+
     <section id="governance" class="governance section-shell" aria-labelledby="governance-title">
       <div><p class="section-kicker">Operating principles</p><h2 id="governance-title">Capability never outruns authority.</h2></div>
       <ul class="principles"><li><strong>Rights before retrieval.</strong><span>Source authority and permitted purpose are evaluated before content is released.</span></li><li><strong>Lineage by default.</strong><span>Media, derivatives, and retrieval outputs remain bound to provenance and integrity evidence.</span></li><li><strong>Human release gates.</strong><span>Technical readiness does not automatically grant publication, provider, billing, or commercial authority.</span></li></ul>
