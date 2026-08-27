@@ -1,0 +1,111 @@
+name: TMG Work Review Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/work-review.ts"
+      - "src/work-review-ui.ts"
+      - "wrangler.review.jsonc"
+      - "scripts/ensure-work-review-access.mjs"
+      - ".github/workflows/work-review-production.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmg-work-review-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.repository == 'Tolani-Corp/TMG-video-services' }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Validate review authority boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN is missing" >&2; exit 2; }
+          node --input-type=module - <<'NODE'
+          import fs from "node:fs";
+          const review = JSON.parse(fs.readFileSync("wrangler.review.jsonc", "utf8"));
+          const backend = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
+          if (review.name !== "tmg-work-review") throw new Error("Unexpected review Worker identity");
+          if (review.main !== "src/work-review.ts") throw new Error("Review Worker entrypoint mismatch");
+          if (review.workers_dev !== false) throw new Error("Review Worker must not expose workers.dev");
+          if (review.routes?.length !== 1 || review.routes[0]?.pattern !== "review.tolanimediagroup.com" || review.routes[0]?.custom_domain !== true) throw new Error("Review Worker custom domain mismatch");
+          if (review.r2_buckets?.length !== 1 || review.r2_buckets[0]?.binding !== "WORK_REQUESTS" || review.r2_buckets[0]?.bucket_name !== "tmg-work-requests-prod") throw new Error("Review Worker must bind only the governed work-request bucket");
+          if (review.workflows?.length !== 1 || review.workflows[0]?.binding !== "WORK_REQUEST_PROCESSOR" || review.workflows[0]?.name !== "tmg-work-request-processing-prod") throw new Error("Review workflow binding mismatch");
+          if (backend.env?.production?.routes || backend.env?.production?.route || backend.env?.production?.custom_domains) throw new Error("Canonical backend must remain unrouted");
+          for (const flag of ["TMG_PUBLIC_API_ENABLED", "TMG_MCP_ENABLED", "TMG_INGEST_WORKFLOW_ENABLED", "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED"]) {
+            if (backend.env?.production?.vars?.[flag] !== "false") throw new Error(`${flag} must remain false`);
+          }
+          NODE
+
+      - name: Compile protected review Worker
+        run: pnpm exec wrangler deploy --config wrangler.review.jsonc --dry-run --outdir .review-dry-run
+
+      - name: Deploy review Worker and durable workflow
+        run: pnpm exec wrangler deploy --config wrangler.review.jsonc
+
+      - name: Verify review Worker and workflow registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deployments status --name tmg-work-review --json > review-worker-registration.json
+          test -s review-worker-registration.json
+          pnpm exec wrangler workflows list --config wrangler.review.jsonc > workflow-list.txt
+          grep -Fq "tmg-work-request-processing-prod" workflow-list.txt
+
+      - name: Enforce Cloudflare Access account-member gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ensure-work-review-access.mjs > review-access.json
+          test -s review-access.json
+          REVIEW_ACCESS="$(cat review-access.json)" node --input-type=module - <<'NODE'
+          const result = JSON.parse(process.env.REVIEW_ACCESS || "{}");
+          if (result.ok !== true) throw new Error("Access reconciliation did not report success");
+          if (result.application?.domain !== "review.tolanimediagroup.com") throw new Error("Access application domain mismatch");
+          if (result.application?.type !== "self_hosted") throw new Error("Review Access app must be self_hosted");
+          if (result.policy?.decision !== "allow" || result.policy?.selector !== "cloudflare_account_member") throw new Error("Review Access policy selector mismatch");
+          NODE
+
+      - name: Verify public denial and existing production isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          review_status="$(curl --silent --location-trusted --max-redirs 0 --output /dev/null --write-out '%{http_code}' --max-time 15 https://review.tolanimediagroup.com/ || true)"
+          case "$review_status" in
+            301|302|303|307|308|401|403) ;;
+            *) echo "Unauthenticated review console was not denied (HTTP ${review_status})" >&2; exit 4 ;;
+          esac
+
+          site_review_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 15 https://tolanimediagroup.com/api/queue)"
+          test "$site_review_status" = "404" || { echo "Public TMG site unexpectedly exposed review API (HTTP ${site_review_status})" >&2; exit 4; }
+
+          for path in /v1/search /mcp /health; do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 15 "https://tolanimediagroup.com${path}")"
+            test "$status" = "404" || { echo "Public site unexpectedly exposed ${path} with HTTP ${status}" >&2; exit 4; }
+          done
