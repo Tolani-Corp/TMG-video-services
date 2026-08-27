@@ -90,7 +90,7 @@ function makeEnv(serviceType = "content-analysis") {
   bucket.putText(key, JSON.stringify(manifest));
   bucket.putText(manifest.files[0]!.objectKey, "evidence");
   const workflowCreate = vi.fn(async (options: { id?: string }) => ({ id: options.id ?? "generated" }));
-  const workflowSendEvent = vi.fn(async () => undefined);
+  const workflowSendEvent = vi.fn(async (_options: { type: string; payload: unknown }) => undefined);
   const workflowGet = vi.fn(async (id: string) => ({ id, sendEvent: workflowSendEvent }));
   return {
     bucket,
