@@ -81,11 +81,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec wrangler r2 bucket list > r2-buckets.txt
-          if ! grep -Fq "tmg-work-requests-prod" r2-buckets.txt; then
+          if ! pnpm exec wrangler r2 bucket info tmg-work-requests-prod --json > bucket-info.json 2>/dev/null; then
             pnpm exec wrangler r2 bucket create tmg-work-requests-prod
           fi
-          pnpm exec wrangler r2 bucket list | grep -Fq "tmg-work-requests-prod"
+          pnpm exec wrangler r2 bucket info tmg-work-requests-prod --json > bucket-info.json
+          test -s bucket-info.json
+          BUCKET_INFO="$(cat bucket-info.json)" node --input-type=module - <<'NODE'
+          const info = JSON.parse(process.env.BUCKET_INFO ?? "{}");
+          const name = info.name ?? info.bucket_name ?? info.bucketName;
+          if (name !== "tmg-work-requests-prod") throw new Error("Unexpected R2 quarantine bucket identity");
+          NODE
 
       - name: Compile site deployment
         run: pnpm exec wrangler deploy --config wrangler.site.jsonc --dry-run --outdir .site-dry-run
