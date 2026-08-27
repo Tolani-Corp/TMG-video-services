@@ -13,8 +13,10 @@ function setText(node, value) {
   if (node) node.textContent = value;
 }
 
-function gated(enabled) {
-  return enabled ? 'Enabled' : 'Gated';
+function runtimeLabel(value) {
+  if (value === true) return 'Enabled';
+  if (value === false) return 'Gated';
+  return 'Not exposed by current backend';
 }
 
 async function syncStatus() {
@@ -26,16 +28,17 @@ async function syncStatus() {
     if (!response.ok) throw new Error(`status ${response.status}`);
     const status = await response.json();
     const healthy = status?.backend?.status === 'reachable';
+    const contract = status?.backend?.syncContract ?? 'unknown-contract';
 
     if (syncRoot) syncRoot.dataset.syncState = healthy ? 'healthy' : 'degraded';
     setText(syncLabel, healthy ? 'Backend synchronized' : 'Backend degraded');
-    setText(backendStatus, healthy ? 'Reachable via private Worker binding' : 'Degraded');
+    setText(backendStatus, healthy ? `Reachable via private Worker binding · ${contract}` : 'Degraded');
     setText(gate, status?.backend?.publicStatusGate ?? 'Unknown');
     setText(policy, status?.backend?.policyVersion ?? 'Unknown');
-    setText(api, gated(status?.runtime?.publicApiEnabled));
-    setText(mcp, gated(status?.runtime?.mcpEnabled));
-    setText(ingestion, gated(status?.runtime?.ingestWorkflowEnabled));
-    setText(egress, gated(status?.runtime?.externalProviderEgressEnabled));
+    setText(api, runtimeLabel(status?.runtime?.publicApiEnabled));
+    setText(mcp, runtimeLabel(status?.runtime?.mcpEnabled));
+    setText(ingestion, runtimeLabel(status?.runtime?.ingestWorkflowEnabled));
+    setText(egress, runtimeLabel(status?.runtime?.externalProviderEgressEnabled));
     setText(syncedAt, status?.synchronizedAt ? new Date(status.synchronizedAt).toLocaleString() : 'Unknown');
   } catch {
     if (syncRoot) syncRoot.dataset.syncState = 'degraded';
