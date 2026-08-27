@@ -5,7 +5,10 @@ on:
     branches: [main]
     paths:
       - "src/work-review.ts"
+      - "src/work-review-core.ts"
+      - "src/work-review-entry.ts"
       - "src/work-review-ui.ts"
+      - "src/work-request-processing-workflow.ts"
       - "wrangler.review.jsonc"
       - "scripts/ensure-work-review-access.mjs"
       - ".github/workflows/work-review-production.yml"
@@ -52,11 +55,11 @@ jobs:
           const review = JSON.parse(fs.readFileSync("wrangler.review.jsonc", "utf8"));
           const backend = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
           if (review.name !== "tmg-work-review") throw new Error("Unexpected review Worker identity");
-          if (review.main !== "src/work-review.ts") throw new Error("Review Worker entrypoint mismatch");
+          if (review.main !== "src/work-review-entry.ts") throw new Error("Review Worker entrypoint mismatch");
           if (review.workers_dev !== false) throw new Error("Review Worker must not expose workers.dev");
           if (review.routes?.length !== 1 || review.routes[0]?.pattern !== "review.tolanimediagroup.com" || review.routes[0]?.custom_domain !== true) throw new Error("Review Worker custom domain mismatch");
           if (review.r2_buckets?.length !== 1 || review.r2_buckets[0]?.binding !== "WORK_REQUESTS" || review.r2_buckets[0]?.bucket_name !== "tmg-work-requests-prod") throw new Error("Review Worker must bind only the governed work-request bucket");
-          if (review.workflows?.length !== 1 || review.workflows[0]?.binding !== "WORK_REQUEST_PROCESSOR" || review.workflows[0]?.name !== "tmg-work-request-processing-prod") throw new Error("Review workflow binding mismatch");
+          if (review.workflows?.length !== 1 || review.workflows[0]?.binding !== "WORK_REQUEST_PROCESSOR" || review.workflows[0]?.name !== "tmg-work-request-processing-prod" || review.workflows[0]?.class_name !== "WorkRequestProcessingWorkflow") throw new Error("Review workflow binding mismatch");
           if (backend.env?.production?.routes || backend.env?.production?.route || backend.env?.production?.custom_domains) throw new Error("Canonical backend must remain unrouted");
           for (const flag of ["TMG_PUBLIC_API_ENABLED", "TMG_MCP_ENABLED", "TMG_INGEST_WORKFLOW_ENABLED", "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED"]) {
             if (backend.env?.production?.vars?.[flag] !== "false") throw new Error(`${flag} must remain false`);
@@ -96,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          review_status="$(curl --silent --location-trusted --max-redirs 0 --output /dev/null --write-out '%{http_code}' --max-time 15 https://review.tolanimediagroup.com/ || true)"
+          review_status="$(curl --silent --max-redirs 0 --output /dev/null --write-out '%{http_code}' --max-time 15 https://review.tolanimediagroup.com/ || true)"
           case "$review_status" in
             301|302|303|307|308|401|403) ;;
             *) echo "Unauthenticated review console was not denied (HTTP ${review_status})" >&2; exit 4 ;;
