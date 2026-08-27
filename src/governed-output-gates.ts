@@ -32,8 +32,12 @@ function allowedProviderEndpoints(env: ReviewEnv): Set<string> {
   return new Set(String(env.TMG_PROVIDER_ENDPOINT_ALLOWLIST ?? "").split(/[,;\s]+/).map((value) => value.trim()).filter(Boolean));
 }
 
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return Uint8Array.from(bytes).buffer;
+}
+
 async function sha256Bytes(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", exactArrayBuffer(bytes));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -109,7 +113,7 @@ export async function callAuthorizedExternalProvider(
     "x-tmg-authority-id": authority.authorityId,
   });
   if (env.TMG_PROVIDER_AUTHORIZATION) headers.set("authorization", env.TMG_PROVIDER_AUTHORIZATION);
-  return fetch(authority.endpoint, { method: "POST", headers, body: payload });
+  return fetch(authority.endpoint, { method: "POST", headers, body: exactArrayBuffer(payload) });
 }
 
 export function derivativeReceiptForPublication(manifest: WorkRequestManifest): DerivativeReceipt | null {
