@@ -33,65 +33,110 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+async function backendGet(env: SiteEnv, path: string): Promise<Response> {
+  return env.TMG_BACKEND.fetch(
+    new Request(`https://tmg.internal${path}`, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        "x-tmg-caller": "tolani-media-group-site",
+      },
+    }),
+  );
+}
+
+function publicStatusFromBootstrap(bootstrap: UnknownRecord): unknown {
+  const runtime = asRecord(bootstrap.runtime);
+  const release = asRecord(bootstrap.release);
+
+  return {
+    schema: "tmg.public-status.v1",
+    site: {
+      status: "ok",
+      worker: "tolani-media-group-site",
+    },
+    backend: {
+      status: "reachable",
+      worker: "tmg-video-services-production",
+      service: asString(bootstrap.service),
+      publicStatusGate: asString(bootstrap.publicStatusGate),
+      policyVersion: asString(runtime.policyVersion),
+      syncContract: "ui-bootstrap-v1",
+    },
+    runtime: {
+      publicApiEnabled: asBoolean(runtime.publicApiEnabled),
+      mcpEnabled: asBoolean(runtime.mcpEnabled),
+      ingestWorkflowEnabled: asBoolean(runtime.ingestWorkflowEnabled),
+      externalProviderEgressEnabled: asBoolean(runtime.externalProviderEgressEnabled),
+      tenantUsageLedgerEnabled: asBoolean(runtime.tenantUsageLedgerEnabled),
+      providerAcceptanceState: asString(runtime.providerAcceptanceState),
+    },
+    release: {
+      status: asString(release.status),
+      activationAuthorized: asBoolean(release.activationAuthorized),
+      publicApiAuthorized: asBoolean(release.publicApiAuthorized),
+      mcpAuthorized: asBoolean(release.mcpAuthorized),
+      ingestionAuthorized: asBoolean(release.ingestionAuthorized),
+      externalProviderEgressAuthorized: asBoolean(release.externalProviderEgressAuthorized),
+      commercialUseAuthorized: asBoolean(release.commercialUseAuthorized),
+    },
+    synchronizedAt: new Date().toISOString(),
+  };
+}
+
+function publicStatusFromHealth(health: UnknownRecord): unknown {
+  return {
+    schema: "tmg.public-status.v1",
+    site: {
+      status: "ok",
+      worker: "tolani-media-group-site",
+    },
+    backend: {
+      status: "reachable",
+      worker: "tmg-video-services-production",
+      service: asString(health.service),
+      publicStatusGate: asString(health.publicStatusGate),
+      policyVersion: asString(health.policyVersion),
+      syncContract: "health-v1",
+    },
+    runtime: {
+      publicApiEnabled: asBoolean(health.publicApiEnabled),
+      mcpEnabled: asBoolean(health.mcpEnabled),
+      ingestWorkflowEnabled: null,
+      externalProviderEgressEnabled: null,
+      tenantUsageLedgerEnabled: null,
+      providerAcceptanceState: "not_exposed_by_health_contract",
+    },
+    release: null,
+    synchronizedAt: new Date().toISOString(),
+  };
+}
+
 async function buildPublicStatus(env: SiteEnv): Promise<Response> {
   try {
-    const upstream = await env.TMG_BACKEND.fetch(
-      new Request("https://tmg.internal/v1/ui/bootstrap", {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-          "x-tmg-caller": "tolani-media-group-site",
-        },
-      }),
-    );
-
-    if (!upstream.ok) {
-      return json(
-        {
-          schema: "tmg.public-status.v1",
-          site: { status: "ok", worker: "tolani-media-group-site" },
-          backend: { status: "degraded", worker: "tmg-video-services-production" },
-        },
-        503,
-      );
+    const bootstrapResponse = await backendGet(env, "/v1/ui/bootstrap");
+    if (bootstrapResponse.ok) {
+      return json(publicStatusFromBootstrap(asRecord(await bootstrapResponse.json())));
     }
 
-    const bootstrap = asRecord(await upstream.json());
-    const runtime = asRecord(bootstrap.runtime);
-    const release = asRecord(bootstrap.release);
+    const healthResponse = await backendGet(env, "/health");
+    if (healthResponse.ok) {
+      return json(publicStatusFromHealth(asRecord(await healthResponse.json())));
+    }
 
-    return json({
-      schema: "tmg.public-status.v1",
-      site: {
-        status: "ok",
-        worker: "tolani-media-group-site",
+    return json(
+      {
+        schema: "tmg.public-status.v1",
+        site: { status: "ok", worker: "tolani-media-group-site" },
+        backend: {
+          status: "degraded",
+          worker: "tmg-video-services-production",
+          bootstrapHttpStatus: bootstrapResponse.status,
+          healthHttpStatus: healthResponse.status,
+        },
       },
-      backend: {
-        status: "reachable",
-        worker: "tmg-video-services-production",
-        service: asString(bootstrap.service),
-        publicStatusGate: asString(bootstrap.publicStatusGate),
-        policyVersion: asString(runtime.policyVersion),
-      },
-      runtime: {
-        publicApiEnabled: asBoolean(runtime.publicApiEnabled),
-        mcpEnabled: asBoolean(runtime.mcpEnabled),
-        ingestWorkflowEnabled: asBoolean(runtime.ingestWorkflowEnabled),
-        externalProviderEgressEnabled: asBoolean(runtime.externalProviderEgressEnabled),
-        tenantUsageLedgerEnabled: asBoolean(runtime.tenantUsageLedgerEnabled),
-        providerAcceptanceState: asString(runtime.providerAcceptanceState),
-      },
-      release: {
-        status: asString(release.status),
-        activationAuthorized: asBoolean(release.activationAuthorized),
-        publicApiAuthorized: asBoolean(release.publicApiAuthorized),
-        mcpAuthorized: asBoolean(release.mcpAuthorized),
-        ingestionAuthorized: asBoolean(release.ingestionAuthorized),
-        externalProviderEgressAuthorized: asBoolean(release.externalProviderEgressAuthorized),
-        commercialUseAuthorized: asBoolean(release.commercialUseAuthorized),
-      },
-      synchronizedAt: new Date().toISOString(),
-    });
+      503,
+    );
   } catch (error) {
     console.error(
       JSON.stringify({
