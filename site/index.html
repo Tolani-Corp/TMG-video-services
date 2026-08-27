@@ -9,6 +9,7 @@
   <link rel="canonical" href="https://tolanimediagroup.com/" />
   <title>Tolani Media Group | Governed Media Intelligence</title>
   <link rel="stylesheet" href="/styles.css" />
+  <script src="/app.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -21,7 +22,7 @@
         <small>Media intelligence infrastructure</small>
       </span>
     </a>
-    <span class="status"><span aria-hidden="true"></span> Controlled pilot infrastructure</span>
+    <span class="status" data-sync-state="checking"><span aria-hidden="true"></span><strong data-sync-label>Synchronizing control plane</strong></span>
   </header>
 
   <main id="main">
@@ -74,9 +75,19 @@
     <section class="status-panel section-shell" aria-labelledby="status-title">
       <div>
         <p class="section-kicker">Current posture</p>
-        <h2 id="status-title">Public company presence live. Product surfaces remain gated.</h2>
+        <h2 id="status-title">Browser and backend share one governed runtime view.</h2>
+        <p class="status-copy">The public site reads a sanitized status record from the private production Worker through a Cloudflare Service Binding. The backend remains unrouted from the public Internet.</p>
       </div>
-      <p>The Tolani Media Group website is publicly available. Public API, MCP, ingestion, external-provider egress, billing, and commercial service activation remain independently controlled by the underlying product release process.</p>
+      <dl class="runtime-grid" aria-label="Live TMG runtime status">
+        <div><dt>Backend</dt><dd data-backend-status>Synchronizing…</dd></div>
+        <div><dt>Product gate</dt><dd data-gate>—</dd></div>
+        <div><dt>Policy</dt><dd data-policy>—</dd></div>
+        <div><dt>Public API</dt><dd data-api>Gated</dd></div>
+        <div><dt>MCP</dt><dd data-mcp>Gated</dd></div>
+        <div><dt>Ingestion</dt><dd data-ingestion>Gated</dd></div>
+        <div><dt>Provider egress</dt><dd data-egress>Gated</dd></div>
+        <div><dt>Last sync</dt><dd data-synced-at>—</dd></div>
+      </dl>
     </section>
   </main>
 
