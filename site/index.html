@@ -13,87 +13,72 @@
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
-
   <header class="site-header">
     <a class="brand" href="/" aria-label="Tolani Media Group home">
       <span class="brand-mark" aria-hidden="true">TMG</span>
-      <span class="brand-copy">
-        <strong>Tolani Media Group</strong>
-        <small>Media intelligence infrastructure</small>
-      </span>
+      <span class="brand-copy"><strong>Tolani Media Group</strong><small>Media intelligence infrastructure</small></span>
     </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#capabilities">Capabilities</a><a href="#work-request">Work request</a><a href="#governance">Governance</a>
+    </nav>
     <span class="status" data-sync-state="checking"><span aria-hidden="true"></span><strong data-sync-label>Synchronizing control plane</strong></span>
   </header>
-
   <main id="main">
     <section class="hero">
       <div class="eyebrow">Tolani ecosystem · Media technology</div>
       <h1>Media infrastructure built for <em>provenance, intelligence, and control.</em></h1>
       <p class="lede">Tolani Media Group develops rights-aware systems that transform authorized media into searchable, governable intelligence while preserving source lineage and release authority.</p>
-      <div class="hero-actions">
-        <a class="button button-primary" href="#capabilities">Explore capabilities</a>
-        <a class="button button-secondary" href="#governance">View operating principles</a>
-      </div>
+      <div class="hero-actions"><a class="button button-primary" href="#work-request">Submit a work request</a><a class="button button-secondary" href="#capabilities">Explore capabilities</a></div>
     </section>
-
     <section id="capabilities" class="section-shell" aria-labelledby="capabilities-title">
-      <div class="section-heading">
-        <p>Core capabilities</p>
-        <h2 id="capabilities-title">One governed media plane, multiple future products.</h2>
-      </div>
+      <div class="section-heading"><p>Core capabilities</p><h2 id="capabilities-title">One governed media plane, multiple future products.</h2></div>
       <div class="grid">
-        <article class="card">
-          <span class="card-index">01</span>
-          <h3>Video intelligence</h3>
-          <p>Temporal segmentation, multimodal retrieval, and structured media understanding designed around evidence and tenant boundaries.</p>
-        </article>
-        <article class="card">
-          <span class="card-index">02</span>
-          <h3>Rights & provenance</h3>
-          <p>Canonical asset manifests, lineage records, rights revisions, integrity checks, and revocation-aware retrieval controls.</p>
-        </article>
-        <article class="card">
-          <span class="card-index">03</span>
-          <h3>Media processing</h3>
-          <p>Governed ingestion, derivative workflows, retrieval infrastructure, and controlled delivery surfaces for approved use cases.</p>
-        </article>
+        <article class="card"><span class="card-index">01</span><h3>Video intelligence</h3><p>Temporal segmentation, multimodal retrieval, and structured media understanding designed around evidence and tenant boundaries.</p></article>
+        <article class="card"><span class="card-index">02</span><h3>Rights & provenance</h3><p>Canonical asset manifests, lineage records, rights revisions, integrity checks, and revocation-aware retrieval controls.</p></article>
+        <article class="card"><span class="card-index">03</span><h3>Media processing</h3><p>Governed ingestion, derivative workflows, retrieval infrastructure, and controlled delivery surfaces for approved use cases.</p></article>
       </div>
     </section>
-
+    <section id="work-request" class="work-request section-shell" aria-labelledby="work-request-title">
+      <div class="work-request-intro">
+        <p class="section-kicker">Client intake</p>
+        <h2 id="work-request-title">Send the brief. Attach the evidence. Keep authority explicit.</h2>
+        <p class="status-copy">Files submitted here are placed in a private R2 quarantine area for human review. Receipt of a work request does not authorize processing, publication, external-provider transfer, or commercial use.</p>
+        <div class="intake-guardrails" aria-label="Upload guardrails"><span>Private quarantine</span><span>SHA-256 verified</span><span>Human review required</span></div>
+      </div>
+      <form class="request-form" data-work-request-form novalidate>
+        <div class="form-grid">
+          <label><span>Name</span><input name="name" autocomplete="name" maxlength="120" required /></label>
+          <label><span>Email</span><input name="email" type="email" autocomplete="email" maxlength="254" required /></label>
+          <label><span>Organization <small>optional</small></span><input name="organization" autocomplete="organization" maxlength="160" /></label>
+          <label><span>Service</span><select name="serviceType" required><option value="">Select a service</option><option value="video-intelligence">Video intelligence</option><option value="media-processing">Media processing</option><option value="rights-provenance">Rights & provenance</option><option value="image-processing">Image processing</option><option value="content-analysis">Content analysis</option><option value="custom">Custom request</option></select></label>
+          <label class="span-2"><span>Project title</span><input name="title" maxlength="160" required /></label>
+          <label class="span-2"><span>What do you need?</span><textarea name="description" rows="5" maxlength="4000" required placeholder="Describe the source material, scope, constraints, and intended use."></textarea></label>
+          <label class="span-2"><span>Desired outcome</span><textarea name="desiredOutcome" rows="3" maxlength="2000" required placeholder="Describe the deliverable or decision this work should support."></textarea></label>
+          <label><span>Target date <small>optional</small></span><input name="targetDate" type="date" /></label>
+        </div>
+        <div class="upload-panel" data-dropzone>
+          <div><strong>Attach source files</strong><p>Up to 5 files · 50 MB each · 150 MB total. PDF, DOCX, TXT, MD, CSV, JSON, JPG, PNG, WebP, MP4, MOV.</p></div>
+          <label class="button button-secondary upload-button">Choose files<input data-file-input name="files" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv,.json,.jpg,.jpeg,.png,.webp,.mp4,.mov,application/pdf,application/json,text/plain,text/markdown,text/csv,image/jpeg,image/png,image/webp,video/mp4,video/quicktime" /></label>
+        </div>
+        <ul class="file-list" data-file-list aria-live="polite"></ul>
+        <div class="attestations">
+          <label class="check-row"><input name="authorizedToShare" type="checkbox" required /><span>I confirm I am authorized to share these files and request this review or service.</span></label>
+          <label class="check-row"><input name="humanReviewAcknowledged" type="checkbox" required /><span>I understand uploads enter quarantine and require human review before any processing or publication authority is granted.</span></label>
+        </div>
+        <div class="submission-row"><button class="button button-primary" type="submit" data-submit-request>Submit work request</button><span class="intake-state" data-intake-state>Checking intake availability…</span></div>
+        <div class="progress-shell" data-progress hidden><div class="progress-track"><span data-progress-bar></span></div><p data-progress-text>Preparing request…</p></div>
+        <div class="receipt" data-receipt hidden aria-live="polite"></div>
+      </form>
+    </section>
     <section id="governance" class="governance section-shell" aria-labelledby="governance-title">
-      <div>
-        <p class="section-kicker">Operating principles</p>
-        <h2 id="governance-title">Capability never outruns authority.</h2>
-      </div>
-      <ul class="principles">
-        <li><strong>Rights before retrieval.</strong><span>Source authority and permitted purpose are evaluated before content is released.</span></li>
-        <li><strong>Lineage by default.</strong><span>Media, derivatives, and retrieval outputs remain bound to provenance and integrity evidence.</span></li>
-        <li><strong>Human release gates.</strong><span>Technical readiness does not automatically grant publication, provider, billing, or commercial authority.</span></li>
-      </ul>
+      <div><p class="section-kicker">Operating principles</p><h2 id="governance-title">Capability never outruns authority.</h2></div>
+      <ul class="principles"><li><strong>Rights before retrieval.</strong><span>Source authority and permitted purpose are evaluated before content is released.</span></li><li><strong>Lineage by default.</strong><span>Media, derivatives, and retrieval outputs remain bound to provenance and integrity evidence.</span></li><li><strong>Human release gates.</strong><span>Technical readiness does not automatically grant publication, provider, billing, or commercial authority.</span></li></ul>
     </section>
-
     <section class="status-panel section-shell" aria-labelledby="status-title">
-      <div>
-        <p class="section-kicker">Current posture</p>
-        <h2 id="status-title">Browser and backend share one governed runtime view.</h2>
-        <p class="status-copy">The public site reads a sanitized status record from the private production Worker through a Cloudflare Service Binding. The backend remains unrouted from the public Internet.</p>
-      </div>
-      <dl class="runtime-grid" aria-label="Live TMG runtime status">
-        <div><dt>Backend</dt><dd data-backend-status>Synchronizing…</dd></div>
-        <div><dt>Product gate</dt><dd data-gate>—</dd></div>
-        <div><dt>Policy</dt><dd data-policy>—</dd></div>
-        <div><dt>Public API</dt><dd data-api>Gated</dd></div>
-        <div><dt>MCP</dt><dd data-mcp>Gated</dd></div>
-        <div><dt>Ingestion</dt><dd data-ingestion>Gated</dd></div>
-        <div><dt>Provider egress</dt><dd data-egress>Gated</dd></div>
-        <div><dt>Last sync</dt><dd data-synced-at>—</dd></div>
-      </dl>
+      <div><p class="section-kicker">Current posture</p><h2 id="status-title">Browser and backend share one governed runtime view.</h2><p class="status-copy">The public site reads a sanitized status record from the private production Worker through a Cloudflare Service Binding. The backend remains unrouted from the public Internet.</p></div>
+      <dl class="runtime-grid" aria-label="Live TMG runtime status"><div><dt>Backend</dt><dd data-backend-status>Synchronizing…</dd></div><div><dt>Product gate</dt><dd data-gate>—</dd></div><div><dt>Policy</dt><dd data-policy>—</dd></div><div><dt>Public API</dt><dd data-api>Gated</dd></div><div><dt>MCP</dt><dd data-mcp>Gated</dd></div><div><dt>Ingestion</dt><dd data-ingestion>Gated</dd></div><div><dt>Provider egress</dt><dd data-egress>Gated</dd></div><div><dt>Last sync</dt><dd data-synced-at>—</dd></div></dl>
     </section>
   </main>
-
-  <footer>
-    <span>© 2026 Tolani Media Group</span>
-    <span>Governed media infrastructure · Tolani ecosystem</span>
-  </footer>
+  <footer><span>© 2026 Tolani Media Group</span><span>Governed media infrastructure · Tolani ecosystem</span></footer>
 </body>
 </html>

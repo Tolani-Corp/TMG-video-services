@@ -8,7 +8,7 @@
     "directory": "./site",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
-    "run_worker_first": ["/status.json"]
+    "run_worker_first": ["/status.json", "/work-requests", "/work-requests/*"]
   },
   "services": [
     {
@@ -16,6 +16,33 @@
       "service": "tmg-video-services-production"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "WORK_REQUESTS",
+      "bucket_name": "tmg-work-requests-prod"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "WORK_REQUEST_START_LIMITER",
+      "namespace_id": "54190261",
+      "simple": {
+        "limit": 3,
+        "period": 60
+      }
+    },
+    {
+      "name": "WORK_REQUEST_UPLOAD_LIMITER",
+      "namespace_id": "54190262",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    }
+  ],
+  "vars": {
+    "TMG_WORK_REQUEST_INTAKE_ENABLED": "true"
+  },
   "routes": [
     {
       "pattern": "tolanimediagroup.com",
