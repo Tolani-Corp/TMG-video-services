@@ -91,7 +91,8 @@ function makeEnv(backendFetch = vi.fn(async () => Response.json(backendBootstrap
 }
 
 async function sha256Hex(value: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", value);
+  const bytes = Uint8Array.from(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes.buffer);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -210,7 +211,9 @@ describe("Tolani Media Group public-site Worker sync", () => {
     expect(storedManifest).not.toContain(start.uploadToken);
     expect(storedManifest).toContain('"processingAuthorized": false');
 
-    const fileId = start.files[0].fileId;
+    const firstFile = start.files[0];
+    expect(firstFile).toBeDefined();
+    const fileId = firstFile!.fileId;
     const uploadResponse = await siteWorker.fetch(new Request(`https://tolanimediagroup.com/work-requests/${start.requestId}/files/${fileId}`, {
       method: "PUT",
       headers: {
