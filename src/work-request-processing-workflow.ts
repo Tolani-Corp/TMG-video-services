@@ -1,14 +1,21 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import {
   appendEvent,
+  asRecord,
   loadManifest,
   processorRoute,
   validRequestId,
   workflowOf,
   writeManifest,
   type DispatchPayload,
+  type ProcessorAuthorizationEvent,
   type ReviewEnv,
 } from "./work-review-core";
+import { executeAuthorizedProcessor, validateProcessorAuthority, type ProcessorExecutionResult } from "./processor-authority";
+
+type SerializedExecution =
+  | { ok: true; result: ProcessorExecutionResult; error: null }
+  | { ok: false; result: null; error: string };
 
 export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv, DispatchPayload> {
   async run(event: WorkflowEvent<DispatchPayload>, step: WorkflowStep): Promise<{ requestId: string; status: string; processorId?: string }> {
@@ -92,21 +99,24 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
     }
 
     const route = processorRoute(serviceType);
-    await step.do("record processor routing checkpoint", async () => {
+    await step.do("record processor authorization checkpoint", async () => {
       const manifest = await loadManifest(this.env, payload.requestId);
       if (!manifest) throw new Error("work_request_not_found");
       manifest.status = "action_required";
       const workflow = workflowOf(manifest);
-      workflow.dispatchState = "checkpoint";
+      workflow.dispatchState = route.authorizable ? "waiting_for_processor_authority" : "checkpoint";
       workflow.phase = "action_required";
       workflow.progress = 82;
       workflow.headline = "Authorized evidence intake verified";
-      workflow.summary = "TMG verified the approved quarantine evidence and resolved the governed service route. The specialized processor remains separately gated.";
+      workflow.summary = route.authorizable
+        ? `TMG verified the approved quarantine evidence. ${route.processorId} is bound but cannot execute until a processor-specific authority envelope is explicitly granted.`
+        : "TMG verified the approved quarantine evidence and resolved the governed service route. The specialized processor remains separately gated.";
       workflow.processorId = route.processorId;
       workflow.processorState = route.state;
+      workflow.processorAuthorizationState = route.authorizable ? "required" : "not_available";
       workflow.outcome = {
         status: "action_required",
-        headline: "Evidence verified; processor authorization checkpoint",
+        headline: route.authorizable ? "Evidence verified; processor authority required" : "Evidence verified; processor authorization checkpoint",
         summary: `The durable workflow verified ${inventory.files} file(s) totaling ${inventory.bytes} bytes and routed the request to ${route.processorId}.`,
         nextAction: route.nextAction,
         confidence: "system_verified",
@@ -126,9 +136,206 @@ export class WorkRequestProcessingWorkflow extends WorkflowEntrypoint<ReviewEnv,
       });
       appendEvent(manifest, {
         phase: "action_required",
-        state: "checkpoint",
-        title: "Specialized processor checkpoint reached",
+        state: route.authorizable ? "processor_authority_required" : "checkpoint",
+        title: route.authorizable ? "Processor-specific authority required" : "Specialized processor checkpoint reached",
         detail: route.nextAction,
+      });
+      await writeManifest(this.env, manifest);
+    });
+
+    if (!route.authorizable) {
+      return { requestId: payload.requestId, status: "action_required", processorId: route.processorId };
+    }
+
+    let authorizationEvent: ProcessorAuthorizationEvent;
+    try {
+      const receivedEvent = await step.waitForEvent<ProcessorAuthorizationEvent>(
+        "wait for explicit processor authority",
+        { type: "processor-authorized", timeout: "7 days" },
+      );
+      authorizationEvent = receivedEvent.payload;
+    } catch {
+      await step.do("record processor authority timeout", async () => {
+        const manifest = await loadManifest(this.env, payload.requestId);
+        if (!manifest) return;
+        manifest.status = "action_required";
+        const workflow = workflowOf(manifest);
+        workflow.dispatchState = "checkpoint";
+        workflow.processorState = "processor_authority_timeout";
+        workflow.processorAuthorizationState = "expired_wait";
+        workflow.phase = "action_required";
+        workflow.progress = 82;
+        workflow.headline = "Processor authorization window expired";
+        workflow.summary = "The processor did not execute because no valid processor-specific authority event was received during the workflow authorization window.";
+        appendEvent(manifest, {
+          phase: "action_required",
+          state: "authorization_timeout",
+          title: "Processor authorization window expired",
+          detail: "No processor execution occurred. Re-review and dispatch a new workflow before granting new authority.",
+        });
+        await writeManifest(this.env, manifest);
+      });
+      return { requestId: payload.requestId, status: "action_required", processorId: route.processorId };
+    }
+
+    const authorityValidation = await step.do("validate processor authority envelope", async () => {
+      const manifest = await loadManifest(this.env, payload.requestId);
+      if (!manifest) throw new Error("work_request_not_found");
+      const authority = manifest.processorAuthorizations?.[route.processorId];
+      const reasons = validateProcessorAuthority(manifest, route, authority, asRecord(authorizationEvent));
+      if (reasons.length) {
+        manifest.status = "action_required";
+        const workflow = workflowOf(manifest);
+        workflow.dispatchState = "checkpoint";
+        workflow.processorState = "processor_authority_invalid";
+        workflow.processorAuthorizationState = "rejected";
+        workflow.phase = "action_required";
+        workflow.progress = 82;
+        workflow.outcome = {
+          status: "action_required",
+          headline: "Processor authority rejected",
+          summary: "The workflow received a processor event but the manifest-bound authority envelope did not satisfy the exact execution contract.",
+          nextAction: "Re-review the request and create a new exact processor authorization. Do not edit or broaden the rejected envelope.",
+          confidence: "system_verified",
+          evidence: reasons.slice(0, 8).map((reason) => ({ label: "Authority rejection", value: reason })),
+          deliverables: [{ label: "Authority validation record", status: "rejected" }],
+        };
+        appendEvent(manifest, {
+          phase: "authorization",
+          state: "rejected",
+          title: "Processor authority envelope rejected",
+          detail: reasons.join(", ").slice(0, 480),
+        });
+        await writeManifest(this.env, manifest);
+        return { allowed: false, authorityId: authority?.authorityId ?? null };
+      }
+
+      if (!authority) throw new Error("processor_authority_missing_after_validation");
+      authority.state = "consumed";
+      authority.consumedAt = new Date().toISOString();
+      manifest.status = "processing";
+      const workflow = workflowOf(manifest);
+      workflow.dispatchState = "running";
+      workflow.processorState = "executing_local_adapter";
+      workflow.processorAuthorizationState = "consumed";
+      workflow.phase = "processing";
+      workflow.progress = 86;
+      workflow.headline = `${route.processorId} authorized`;
+      workflow.summary = "The exact local processor authority envelope was validated against this request, review, workflow instance, and evidence inventory.";
+      appendEvent(manifest, {
+        phase: "authorization",
+        state: "consumed",
+        title: "Processor-specific authority validated",
+        detail: `${route.processorId} may execute only ${route.allowedActions.join(", ")}; publication and provider egress remain gated.`,
+      });
+      await writeManifest(this.env, manifest);
+      return { allowed: true, authorityId: authority.authorityId };
+    });
+
+    if (!authorityValidation.allowed) {
+      return { requestId: payload.requestId, status: "action_required", processorId: route.processorId };
+    }
+
+    const executionJson = await step.do("execute authorized local processor adapter", async () => {
+      let execution: SerializedExecution;
+      try {
+        const manifest = await loadManifest(this.env, payload.requestId);
+        if (!manifest) throw new Error("work_request_not_found");
+        const result = await executeAuthorizedProcessor(this.env, manifest, route);
+        execution = { ok: true, result, error: null };
+      } catch (error) {
+        execution = {
+          ok: false,
+          result: null,
+          error: error instanceof Error ? error.message : "unknown_processor_failure",
+        };
+      }
+      return JSON.stringify(execution);
+    });
+    const execution = JSON.parse(executionJson) as SerializedExecution;
+
+    if (!execution.ok) {
+      await step.do("record local processor failure", async () => {
+        const manifest = await loadManifest(this.env, payload.requestId);
+        if (!manifest) return;
+        manifest.status = "action_required";
+        const workflow = workflowOf(manifest);
+        workflow.dispatchState = "checkpoint";
+        workflow.processorState = "local_adapter_failed";
+        workflow.phase = "action_required";
+        workflow.progress = 88;
+        workflow.headline = "Authorized local processor needs operator attention";
+        workflow.summary = "The processor authority was consumed, but the bounded local adapter did not produce a valid result.";
+        workflow.outcome = {
+          status: "action_required",
+          headline: "Local processor execution failed safely",
+          summary: execution.error,
+          nextAction: "Inspect the evidence and adapter failure before issuing any new authority. Publication and provider egress remain gated.",
+          confidence: "system_verified",
+          evidence: [{ label: "Processor", value: route.processorId }],
+          deliverables: [{ label: "Local processor result", status: "failed" }],
+        };
+        appendEvent(manifest, {
+          phase: "processing",
+          state: "failed_safe",
+          title: "Authorized local processor stopped safely",
+          detail: execution.error,
+        });
+        await writeManifest(this.env, manifest);
+      });
+      return { requestId: payload.requestId, status: "action_required", processorId: route.processorId };
+    }
+
+    const processorResult = execution.result;
+    await step.do("record processor result and return to human checkpoint", async () => {
+      const manifest = await loadManifest(this.env, payload.requestId);
+      if (!manifest) throw new Error("work_request_not_found");
+      if (manifest.controls.publicationAuthorized || manifest.controls.externalProviderEgressAuthorized) {
+        throw new Error("authority_broadened_during_local_processor_execution");
+      }
+      const workflow = workflowOf(manifest);
+      const results = workflow.processorResults ?? {};
+      results[route.processorId] = {
+        schema: "tmg.processor-result.v1",
+        processorId: route.processorId,
+        adapter: route.adapter,
+        authorityId: authorityValidation.authorityId,
+        executedAt: new Date().toISOString(),
+        status: processorResult.status,
+        headline: processorResult.headline,
+        summary: processorResult.summary,
+        confidence: processorResult.confidence,
+        details: processorResult.details,
+      };
+      workflow.processorResults = results;
+      manifest.status = "action_required";
+      workflow.dispatchState = "checkpoint";
+      workflow.processorState = "local_adapter_complete";
+      workflow.processorAuthorizationState = "consumed";
+      workflow.phase = "action_required";
+      workflow.progress = processorResult.progress;
+      workflow.headline = processorResult.headline;
+      workflow.summary = processorResult.summary;
+      workflow.outcome = {
+        status: processorResult.status,
+        headline: processorResult.headline,
+        summary: processorResult.summary,
+        nextAction: processorResult.nextAction,
+        confidence: processorResult.confidence,
+        evidence: processorResult.evidence,
+        deliverables: processorResult.deliverables,
+      };
+      appendEvent(manifest, {
+        phase: "processing",
+        state: "complete",
+        title: `${route.processorId} local adapter completed`,
+        detail: processorResult.summary,
+      });
+      appendEvent(manifest, {
+        phase: "action_required",
+        state: "checkpoint",
+        title: "Processor result returned to human checkpoint",
+        detail: processorResult.nextAction,
       });
       await writeManifest(this.env, manifest);
     });

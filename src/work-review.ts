@@ -5,14 +5,17 @@ import {
   asRecord,
   bounded,
   loadManifest,
+  processorRoute,
   validFileId,
   workflowOf,
   writeManifest,
   type DispatchPayload,
+  type ProcessorAuthorizationEvent,
   type ReviewEnv,
   type WorkRequestManifest,
   type WorkRequestStatus,
 } from "./work-review-core";
+import { buildProcessorAuthorityEnvelope } from "./processor-authority";
 
 type AccessIdentity = { email?: string; name?: string; id?: string };
 type AccessContext = ExecutionContext & {
@@ -99,6 +102,7 @@ function internalManifestView(manifest: WorkRequestManifest): Record<string, unk
       uploadedAt: uploadedAt ?? null,
     })),
     review: manifest.review ?? null,
+    processorAuthorizations: manifest.processorAuthorizations ?? {},
     workflow: manifest.workflow ?? null,
   };
 }
@@ -231,19 +235,20 @@ async function approveAndDispatch(request: Request, env: ReviewEnv, requestId: s
   manifest.status = "approved_for_processing";
   manifest.controls = { processingAuthorized: true, publicationAuthorized: false, externalProviderEgressAuthorized: false };
   manifest.review = { state: "approved", reviewId, reviewerEmail: operator.email, note, at };
+  manifest.processorAuthorizations = {};
   const workflow = workflowOf(manifest);
   workflow.instanceId = instanceId;
   workflow.dispatchState = "requested";
   workflow.phase = "authorization";
   workflow.progress = 58;
   workflow.headline = "Processing authority approved";
-  workflow.summary = "An authenticated human reviewer approved bounded processing authority. Publication and external-provider egress remain gated.";
-  appendEvent(manifest, { phase: "authorization", state: "approved", title: "Processing authority granted", detail: note });
+  workflow.summary = "An authenticated human reviewer approved bounded request processing. Processor-specific authority, publication, and external-provider egress remain separately gated.";
+  appendEvent(manifest, { phase: "authorization", state: "approved", title: "Request processing authority granted", detail: note });
   appendEvent(manifest, {
     phase: "authorization",
     state: "dispatch_requested",
     title: "Governed workflow dispatch requested",
-    detail: `Workflow instance ${instanceId} reserved for this approved review.`,
+    detail: `Workflow instance ${instanceId} reserved for this approved review. No specialized processor authority has been granted.`,
   });
   await writeManifest(env, manifest);
 
@@ -280,12 +285,104 @@ async function approveAndDispatch(request: Request, env: ReviewEnv, requestId: s
   }
 }
 
+async function authorizeProcessor(request: Request, env: ReviewEnv, requestId: string, operator: Operator): Promise<Response> {
+  const manifest = await loadManifest(env, requestId);
+  if (!manifest) return json({ error: "not_found" }, 404);
+  if (manifest.status !== "action_required" || manifest.controls.processingAuthorized !== true) {
+    return json({ error: "processor_authority_requires_active_checkpoint", status: manifest.status }, 409);
+  }
+  if (manifest.controls.publicationAuthorized || manifest.controls.externalProviderEgressAuthorized) {
+    return json({ error: "processor_authority_exceeds_local_envelope" }, 409);
+  }
+  if (manifest.review?.state !== "approved") return json({ error: "approved_human_review_required" }, 409);
+
+  const route = processorRoute(manifest.request.serviceType);
+  if (!route.authorizable || !route.localOnly || !route.adapter) {
+    return json({ error: "processor_not_locally_authorizable", processorId: route.processorId, processorState: route.state }, 409);
+  }
+  const workflow = workflowOf(manifest);
+  if (!workflow.instanceId || workflow.processorId !== route.processorId || workflow.dispatchState !== "waiting_for_processor_authority") {
+    return json({ error: "workflow_not_waiting_for_processor_authority", processorId: route.processorId }, 409);
+  }
+  if (workflow.processorAuthorizationState !== "required") {
+    return json({ error: "processor_authority_not_required", state: workflow.processorAuthorizationState ?? "unknown" }, 409);
+  }
+
+  const body = asRecord(await request.json().catch(() => null));
+  const note = bounded(body.note, 1000);
+  if (!note || note.length < 10) return json({ error: "processor_authority_note_required" }, 400);
+  const requestedProcessorId = bounded(body.processorId, 80);
+  if (requestedProcessorId !== route.processorId) {
+    return json({ error: "processor_authority_route_mismatch", expectedProcessorId: route.processorId }, 400);
+  }
+
+  const authority = buildProcessorAuthorityEnvelope(manifest, route, operator.email, note);
+  manifest.processorAuthorizations = { ...(manifest.processorAuthorizations ?? {}), [route.processorId]: authority };
+  workflow.processorAuthorizationState = "authorized_event_pending";
+  workflow.processorState = "processor_authorized_waiting_for_workflow";
+  appendEvent(manifest, {
+    phase: "authorization",
+    state: "authorized",
+    title: `${route.processorId} authority granted`,
+    detail: `Authority ${authority.authorityId} is local-only, bound to ${authority.evidenceBindings.length} evidence object(s), and expires at ${authority.expiresAt}.`,
+  });
+  await writeManifest(env, manifest);
+
+  const eventPayload: ProcessorAuthorizationEvent = {
+    authorityId: authority.authorityId,
+    processorId: authority.processorId,
+    reviewId: authority.reviewId,
+  };
+
+  try {
+    const instance = await env.WORK_REQUEST_PROCESSOR.get(authority.workflowInstanceId);
+    await instance.sendEvent({ type: "processor-authorized", payload: eventPayload });
+  } catch (error) {
+    const latest = await loadManifest(env, requestId);
+    if (latest) {
+      const storedAuthority = latest.processorAuthorizations?.[route.processorId];
+      if (storedAuthority?.authorityId === authority.authorityId && storedAuthority.state === "authorized") storedAuthority.state = "revoked";
+      const latestWorkflow = workflowOf(latest);
+      latestWorkflow.processorAuthorizationState = "event_dispatch_failed";
+      latestWorkflow.processorState = "processor_authority_event_failed";
+      appendEvent(latest, {
+        phase: "authorization",
+        state: "failed",
+        title: "Processor authority event failed",
+        detail: error instanceof Error ? error.message : "unknown workflow event failure",
+      });
+      await writeManifest(env, latest);
+    }
+    return json({ error: "processor_authority_event_failed" }, 502);
+  }
+
+  return json({
+    ...internalManifestView(manifest),
+    processorDispatch: {
+      processorId: route.processorId,
+      authorityId: authority.authorityId,
+      workflowInstanceId: authority.workflowInstanceId,
+      eventType: "processor-authorized",
+      state: "sent",
+    },
+  });
+}
+
 async function recordOutcome(request: Request, env: ReviewEnv, requestId: string, operator: Operator): Promise<Response> {
   const manifest = await loadManifest(env, requestId);
   if (!manifest) return json({ error: "not_found" }, 404);
   if (manifest.status !== "action_required") {
     return json({ error: "outcome_requires_action_required_checkpoint", status: manifest.status }, 409);
   }
+
+  const route = processorRoute(manifest.request.serviceType);
+  if (route.authorizable) {
+    const result = asRecord(workflowOf(manifest).processorResults?.[route.processorId]);
+    if (result.schema !== "tmg.processor-result.v1") {
+      return json({ error: "processor_execution_required_before_outcome", processorId: route.processorId }, 409);
+    }
+  }
+
   const body = asRecord(await request.json().catch(() => null));
   const status = bounded(body.status, 32);
   if (!status || !["completed", "action_required", "failed"].includes(status)) {
@@ -387,13 +484,14 @@ const reviewWorker = {
       return evidenceDownload(env, download[1]!, download[2]!);
     }
 
-    const action = url.pathname.match(/^\/api\/requests\/(wr_[^/]+)\/(review|approve|reject|outcome)$/);
+    const action = url.pathname.match(/^\/api\/requests\/(wr_[^/]+)\/(review|approve|reject|authorize-processor|outcome)$/);
     if (request.method === "POST" && action) {
       const requestId = action[1]!;
       switch (action[2]) {
         case "review": return startReview(env, requestId, operator);
         case "approve": return approveAndDispatch(request, env, requestId, operator);
         case "reject": return rejectRequest(request, env, requestId, operator);
+        case "authorize-processor": return authorizeProcessor(request, env, requestId, operator);
         case "outcome": return recordOutcome(request, env, requestId, operator);
       }
     }
