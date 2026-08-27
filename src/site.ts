@@ -38,6 +38,18 @@ type SiteEnv = {
 
 type UnknownRecord = Record<string, unknown>;
 
+type WorkRequestStatus =
+  | "draft_uploading"
+  | "received_unreviewed"
+  | "reviewing"
+  | "approved_for_processing"
+  | "processing"
+  | "action_required"
+  | "completed"
+  | "rejected"
+  | "withdrawn"
+  | "failed";
+
 type WorkRequestFile = {
   fileId: string;
   name: string;
@@ -50,10 +62,16 @@ type WorkRequestFile = {
   uploadedAt?: string;
 };
 
+type WorkRequestControls = {
+  processingAuthorized: boolean;
+  publicationAuthorized: boolean;
+  externalProviderEgressAuthorized: boolean;
+};
+
 type WorkRequestManifest = {
   schema: "tmg.work-request.v1";
   requestId: string;
-  status: "draft_uploading" | "received_unreviewed";
+  status: WorkRequestStatus;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -70,16 +88,13 @@ type WorkRequestManifest = {
     targetDate: string | null;
   };
   rights: {
-    authorizedToShare: true;
-    humanReviewAcknowledged: true;
+    authorizedToShare: boolean;
+    humanReviewAcknowledged: boolean;
   };
-  controls: {
-    processingAuthorized: false;
-    publicationAuthorized: false;
-    externalProviderEgressAuthorized: false;
-  };
+  controls: WorkRequestControls;
   tokenHash: string;
   files: WorkRequestFile[];
+  workflow?: UnknownRecord;
 };
 
 const MAX_FILES = 5;
@@ -106,6 +121,25 @@ const SERVICE_TYPES = new Set([
   "content-analysis",
   "custom",
 ]);
+const WORK_REQUEST_STATUSES = new Set<WorkRequestStatus>([
+  "draft_uploading",
+  "received_unreviewed",
+  "reviewing",
+  "approved_for_processing",
+  "processing",
+  "action_required",
+  "completed",
+  "rejected",
+  "withdrawn",
+  "failed",
+]);
+const PROCESSING_STAGE_LABELS = [
+  ["intake", "Intake"],
+  ["review", "Human review"],
+  ["authorization", "Authority"],
+  ["processing", "Processing"],
+  ["outcome", "Outcome"],
+] as const;
 
 function asRecord(value: unknown): UnknownRecord {
   return typeof value === "object" && value !== null ? (value as UnknownRecord) : {};
@@ -124,6 +158,13 @@ function cleanText(value: unknown, maxLength: number): string | null {
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized || normalized.length > maxLength) return null;
   return normalized;
+}
+
+function boundedText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
 }
 
 function cleanOptionalText(value: unknown, maxLength: number): string | null {
@@ -210,7 +251,9 @@ async function loadManifest(env: SiteEnv, requestId: string): Promise<WorkReques
   const object = await env.WORK_REQUESTS.get(requestManifestKey(requestId));
   if (!object?.text) return null;
   try {
-    return JSON.parse(await object.text()) as WorkRequestManifest;
+    const manifest = JSON.parse(await object.text()) as WorkRequestManifest;
+    if (!WORK_REQUEST_STATUSES.has(manifest.status)) return null;
+    return manifest;
   } catch {
     return null;
   }
@@ -240,6 +283,243 @@ async function authenticateRequest(request: Request, manifest: WorkRequestManife
 function rateLimitKey(request: Request, suffix: string): string {
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   return `${suffix}:${ip}`;
+}
+
+function lifecycleDefaults(status: WorkRequestStatus): {
+  rank: number;
+  progress: number;
+  phase: string;
+  state: "active" | "waiting" | "action_required" | "terminal";
+  headline: string;
+  summary: string;
+} {
+  switch (status) {
+    case "draft_uploading":
+      return {
+        rank: 0,
+        progress: 15,
+        phase: "intake",
+        state: "active",
+        headline: "Securing your request",
+        summary: "Files are being checksum-bound and placed in private quarantine.",
+      };
+    case "received_unreviewed":
+      return {
+        rank: 1,
+        progress: 35,
+        phase: "human_review",
+        state: "waiting",
+        headline: "Awaiting human review",
+        summary: "The request is sealed in quarantine. Processing has not started and no publication authority exists.",
+      };
+    case "reviewing":
+      return {
+        rank: 1,
+        progress: 45,
+        phase: "human_review",
+        state: "active",
+        headline: "Human review in progress",
+        summary: "Scope, rights evidence, requested outcome, and processing boundaries are being evaluated.",
+      };
+    case "approved_for_processing":
+      return {
+        rank: 2,
+        progress: 58,
+        phase: "authorization",
+        state: "waiting",
+        headline: "Processing authority approved",
+        summary: "The request has passed review and is waiting for an authorized workflow execution slot.",
+      };
+    case "processing":
+      return {
+        rank: 3,
+        progress: 72,
+        phase: "processing",
+        state: "active",
+        headline: "Governed processing in progress",
+        summary: "Authorized workflow steps are executing. Live evidence and outcome context will appear here as they are recorded.",
+      };
+    case "action_required":
+      return {
+        rank: 3,
+        progress: 76,
+        phase: "action_required",
+        state: "action_required",
+        headline: "Your input is required",
+        summary: "The workflow is holding at a governed checkpoint pending additional context or a human decision.",
+      };
+    case "completed":
+      return {
+        rank: 4,
+        progress: 100,
+        phase: "outcome",
+        state: "terminal",
+        headline: "Processing complete",
+        summary: "The governed workflow reached a terminal outcome. Review the outcome context and available deliverables below.",
+      };
+    case "rejected":
+      return {
+        rank: 4,
+        progress: 100,
+        phase: "closed",
+        state: "terminal",
+        headline: "Request closed during review",
+        summary: "The request did not receive authority to proceed into processing.",
+      };
+    case "withdrawn":
+      return {
+        rank: 4,
+        progress: 100,
+        phase: "closed",
+        state: "terminal",
+        headline: "Request withdrawn",
+        summary: "The request is closed and no additional workflow activity is authorized.",
+      };
+    case "failed":
+      return {
+        rank: 4,
+        progress: 100,
+        phase: "failed",
+        state: "terminal",
+        headline: "Processing stopped",
+        summary: "The workflow reached a failure state. The recorded outcome context identifies the latest safe checkpoint.",
+      };
+  }
+}
+
+function clampProgress(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function sanitizedWorkflowEvents(workflow: UnknownRecord, fallbackPhase: string, fallbackAt: string): Array<UnknownRecord> {
+  const source = Array.isArray(workflow.events) ? workflow.events.slice(-12) : [];
+  const events: Array<UnknownRecord> = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const event = asRecord(source[index]);
+    const title = boundedText(event.title, 140);
+    if (!title) continue;
+    events.push({
+      id: boundedText(event.id, 80) ?? `event-${index + 1}`,
+      at: boundedText(event.at, 48) ?? fallbackAt,
+      phase: boundedText(event.phase, 48) ?? fallbackPhase,
+      state: boundedText(event.state, 32) ?? "observed",
+      title,
+      detail: boundedText(event.detail, 480),
+    });
+  }
+  return events;
+}
+
+function sanitizedOutcome(workflow: UnknownRecord): UnknownRecord | null {
+  const outcome = asRecord(workflow.outcome);
+  const headline = boundedText(outcome.headline, 180);
+  const summary = boundedText(outcome.summary, 1200);
+  const nextAction = boundedText(outcome.nextAction, 480);
+  const confidence = boundedText(outcome.confidence, 80);
+
+  const evidence = (Array.isArray(outcome.evidence) ? outcome.evidence : [])
+    .slice(0, 8)
+    .map((raw) => {
+      const item = asRecord(raw);
+      const label = boundedText(item.label, 120);
+      const value = boundedText(item.value, 320);
+      return label && value ? { label, value } : null;
+    })
+    .filter((item): item is { label: string; value: string } => item !== null);
+
+  const deliverables = (Array.isArray(outcome.deliverables) ? outcome.deliverables : [])
+    .slice(0, 8)
+    .map((raw) => {
+      const item = asRecord(raw);
+      const label = boundedText(item.label, 140);
+      const state = boundedText(item.status, 64) ?? "available";
+      return label ? { label, status: state } : null;
+    })
+    .filter((item): item is { label: string; status: string } => item !== null);
+
+  if (!headline && !summary && !nextAction && !confidence && evidence.length === 0 && deliverables.length === 0) return null;
+  return {
+    status: boundedText(outcome.status, 48) ?? "recorded",
+    headline,
+    summary,
+    nextAction,
+    confidence,
+    evidence,
+    deliverables,
+  };
+}
+
+function processingStatusFromManifest(manifest: WorkRequestManifest): UnknownRecord {
+  const defaults = lifecycleDefaults(manifest.status);
+  const workflow = asRecord(manifest.workflow);
+  const progress = clampProgress(workflow.progress, defaults.progress);
+  const phase = boundedText(workflow.phase, 64) ?? defaults.phase;
+  const headline = boundedText(workflow.headline, 180) ?? defaults.headline;
+  const summary = boundedText(workflow.summary, 1200) ?? defaults.summary;
+  const terminal = defaults.state === "terminal";
+  const stages = PROCESSING_STAGE_LABELS.map(([key, label], index) => ({
+    key,
+    label,
+    state: manifest.status === "completed"
+      ? "complete"
+      : index < defaults.rank
+        ? "complete"
+        : index === defaults.rank
+          ? terminal
+            ? "blocked"
+            : "active"
+          : "pending",
+  }));
+
+  const uploadedFiles = manifest.files.filter((file) => file.status === "uploaded").length;
+  return {
+    schema: "tmg.work-request-processing-status.v1",
+    requestId: manifest.requestId,
+    status: manifest.status,
+    updatedAt: manifest.updatedAt,
+    createdAt: manifest.createdAt,
+    request: {
+      title: manifest.request.title,
+      serviceType: manifest.request.serviceType,
+      desiredOutcome: manifest.request.desiredOutcome,
+      targetDate: manifest.request.targetDate,
+    },
+    lifecycle: {
+      phase,
+      state: defaults.state,
+      progress,
+      headline,
+      summary,
+      stages,
+    },
+    context: {
+      files: { total: manifest.files.length, uploaded: uploadedFiles },
+      rights: {
+        authorizedToShare: manifest.rights.authorizedToShare === true,
+        humanReviewAcknowledged: manifest.rights.humanReviewAcknowledged === true,
+      },
+      controls: {
+        processingAuthorized: manifest.controls.processingAuthorized === true,
+        publicationAuthorized: manifest.controls.publicationAuthorized === true,
+        externalProviderEgressAuthorized: manifest.controls.externalProviderEgressAuthorized === true,
+      },
+    },
+    events: sanitizedWorkflowEvents(workflow, phase, manifest.updatedAt),
+    outcome: sanitizedOutcome(workflow),
+    clientActions: ["pause_live_updates", "refresh", "copy_reference", "download_snapshot", "new_request"],
+  };
+}
+
+async function getWorkRequestProcessingStatus(request: Request, env: SiteEnv, requestId: string): Promise<Response> {
+  if (!intakeEnabled(env) || !validRequestId(requestId)) return json({ error: "not_found" }, 404);
+
+  const limit = await env.WORK_REQUEST_UPLOAD_LIMITER.limit({ key: `status:${requestId}` });
+  if (!limit.success) return json({ error: "rate_limit_exceeded" }, 429);
+
+  const manifest = await loadManifest(env, requestId);
+  if (!manifest || !(await authenticateRequest(request, manifest))) return json({ error: "not_found" }, 404);
+  return json(processingStatusFromManifest(manifest));
 }
 
 async function startWorkRequest(request: Request, env: SiteEnv): Promise<Response> {
@@ -422,6 +702,7 @@ async function completeWorkRequest(request: Request, env: SiteEnv, requestId: st
       controls: manifest.controls,
     });
   }
+  if (manifest.status !== "draft_uploading") return json({ error: "request_not_completable" }, 409);
 
   for (const file of manifest.files) {
     if (file.status !== "uploaded") return json({ error: "uploads_incomplete", fileId: file.fileId }, 409);
@@ -569,6 +850,11 @@ export default {
 
     const completeMatch = url.pathname.match(/^\/work-requests\/(wr_[^/]+)\/complete$/);
     if (request.method === "POST" && completeMatch) return completeWorkRequest(request, env, completeMatch[1]!);
+
+    const processingStatusMatch = url.pathname.match(/^\/work-requests\/(wr_[^/]+)\/status$/);
+    if (request.method === "GET" && processingStatusMatch) {
+      return getWorkRequestProcessingStatus(request, env, processingStatusMatch[1]!);
+    }
 
     return env.ASSETS.fetch(request);
   },
