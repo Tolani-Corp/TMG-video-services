@@ -57,10 +57,27 @@ type WorkRequestManifest = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
-  requester: { name: string; email: string; organization: string | null };
-  request: { serviceType: string; title: string; description: string; desiredOutcome: string; targetDate: string | null };
-  rights: { authorizedToShare: true; humanReviewAcknowledged: true };
-  controls: { processingAuthorized: false; publicationAuthorized: false; externalProviderEgressAuthorized: false };
+  requester: {
+    name: string;
+    email: string;
+    organization: string | null;
+  };
+  request: {
+    serviceType: string;
+    title: string;
+    description: string;
+    desiredOutcome: string;
+    targetDate: string | null;
+  };
+  rights: {
+    authorizedToShare: true;
+    humanReviewAcknowledged: true;
+  };
+  controls: {
+    processingAuthorized: false;
+    publicationAuthorized: false;
+    externalProviderEgressAuthorized: false;
+  };
   tokenHash: string;
   files: WorkRequestFile[];
 };
@@ -135,7 +152,9 @@ function isSha256(value: string): boolean {
 
 function hexToArrayBuffer(hex: string): ArrayBuffer {
   const bytes = new Uint8Array(hex.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
   return bytes.buffer;
 }
 
@@ -200,8 +219,15 @@ async function loadManifest(env: SiteEnv, requestId: string): Promise<WorkReques
 async function writeManifest(env: SiteEnv, manifest: WorkRequestManifest): Promise<void> {
   manifest.updatedAt = new Date().toISOString();
   await env.WORK_REQUESTS.put(requestManifestKey(manifest.requestId), JSON.stringify(manifest, null, 2), {
-    httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" },
-    customMetadata: { schema: manifest.schema, requestId: manifest.requestId, status: manifest.status },
+    httpMetadata: {
+      contentType: "application/json; charset=utf-8",
+      cacheControl: "no-store",
+    },
+    customMetadata: {
+      schema: manifest.schema,
+      requestId: manifest.requestId,
+      status: manifest.status,
+    },
   });
 }
 
@@ -217,7 +243,9 @@ function rateLimitKey(request: Request, suffix: string): string {
 }
 
 async function startWorkRequest(request: Request, env: SiteEnv): Promise<Response> {
-  if (!intakeEnabled(env)) return json({ error: "work_request_intake_disabled" }, 503);
+  if (!intakeEnabled(env)) {
+    return json({ error: "work_request_intake_disabled" }, 503);
+  }
 
   const limit = await env.WORK_REQUEST_START_LIMITER.limit({ key: rateLimitKey(request, "start") });
   if (!limit.success) return json({ error: "rate_limit_exceeded" }, 429);
@@ -242,7 +270,9 @@ async function startWorkRequest(request: Request, env: SiteEnv): Promise<Respons
     return json({ error: "invalid_work_request" }, 400);
   }
   if (targetDate !== null && !isIsoDate(targetDate)) return json({ error: "invalid_target_date" }, 400);
-  if (body.authorizedToShare !== true || body.humanReviewAcknowledged !== true) return json({ error: "required_attestations_missing" }, 400);
+  if (body.authorizedToShare !== true || body.humanReviewAcknowledged !== true) {
+    return json({ error: "required_attestations_missing" }, 400);
+  }
   if (filesInput.length > MAX_FILES) return json({ error: "too_many_files", maxFiles: MAX_FILES }, 400);
 
   let totalBytes = 0;
@@ -268,7 +298,12 @@ async function startWorkRequest(request: Request, env: SiteEnv): Promise<Respons
   const createdAt = new Date().toISOString();
   const files: WorkRequestFile[] = pendingFiles.map((file) => {
     const fileId = `file_${crypto.randomUUID()}`;
-    return { ...file, fileId, status: "pending", objectKey: `quarantine/${requestId}/files/${fileId}` };
+    return {
+      ...file,
+      fileId,
+      status: "pending",
+      objectKey: `quarantine/${requestId}/files/${fileId}`,
+    };
   });
 
   const manifest: WorkRequestManifest = {
@@ -277,24 +312,44 @@ async function startWorkRequest(request: Request, env: SiteEnv): Promise<Respons
     status: "draft_uploading",
     createdAt,
     updatedAt: createdAt,
-    requester: { name, email: emailRaw.toLowerCase(), organization },
-    request: { serviceType, title, description, desiredOutcome, targetDate },
-    rights: { authorizedToShare: true, humanReviewAcknowledged: true },
-    controls: { processingAuthorized: false, publicationAuthorized: false, externalProviderEgressAuthorized: false },
+    requester: {
+      name,
+      email: emailRaw.toLowerCase(),
+      organization,
+    },
+    request: {
+      serviceType,
+      title,
+      description,
+      desiredOutcome,
+      targetDate,
+    },
+    rights: {
+      authorizedToShare: true,
+      humanReviewAcknowledged: true,
+    },
+    controls: {
+      processingAuthorized: false,
+      publicationAuthorized: false,
+      externalProviderEgressAuthorized: false,
+    },
     tokenHash,
     files,
   };
 
   await writeManifest(env, manifest);
 
-  return json({
-    schema: "tmg.work-request-receipt.v1",
-    requestId,
-    uploadToken,
-    status: manifest.status,
-    files: files.map(({ fileId, name, size, type }) => ({ fileId, name, size, type })),
-    controls: manifest.controls,
-  }, 201);
+  return json(
+    {
+      schema: "tmg.work-request-receipt.v1",
+      requestId,
+      uploadToken,
+      status: manifest.status,
+      files: files.map(({ fileId, name, size, type }) => ({ fileId, name, size, type })),
+      controls: manifest.controls,
+    },
+    201,
+  );
 }
 
 async function uploadWorkRequestFile(request: Request, env: SiteEnv, requestId: string, fileId: string): Promise<Response> {
@@ -314,7 +369,9 @@ async function uploadWorkRequestFile(request: Request, env: SiteEnv, requestId: 
 
   const contentLength = Number(request.headers.get("content-length"));
   const contentType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (!Number.isSafeInteger(contentLength) || contentLength !== expected.size || contentLength > MAX_FILE_BYTES) return json({ error: "file_size_mismatch" }, 400);
+  if (!Number.isSafeInteger(contentLength) || contentLength !== expected.size || contentLength > MAX_FILE_BYTES) {
+    return json({ error: "file_size_mismatch" }, 400);
+  }
   if (contentType !== expected.type) return json({ error: "file_type_mismatch" }, 400);
   if (!request.body) return json({ error: "file_body_required" }, 400);
 
@@ -327,14 +384,19 @@ async function uploadWorkRequestFile(request: Request, env: SiteEnv, requestId: 
       contentDisposition: `attachment; filename="${expected.name.replaceAll('"', "_")}"`,
       cacheControl: "no-store",
     },
-    customMetadata: { requestId, fileId, originalName: expected.name, intakeStatus: "quarantine_unreviewed" },
+    customMetadata: {
+      requestId,
+      fileId,
+      originalName: expected.name,
+      intakeStatus: "quarantine_unreviewed",
+    },
     sha256: hexToArrayBuffer(expected.sha256),
   });
 
   if (!stored || stored.size !== expected.size) return json({ error: "upload_integrity_failure" }, 500);
 
   expected.status = "uploaded";
-  expected.etag = stored.etag;
+  if (stored.etag) expected.etag = stored.etag;
   expected.uploadedAt = new Date().toISOString();
   await writeManifest(env, manifest);
 
@@ -353,7 +415,12 @@ async function completeWorkRequest(request: Request, env: SiteEnv, requestId: st
   const manifest = await loadManifest(env, requestId);
   if (!manifest || !(await authenticateRequest(request, manifest))) return json({ error: "not_found" }, 404);
   if (manifest.status === "received_unreviewed") {
-    return json({ schema: "tmg.work-request-receipt.v1", requestId, status: manifest.status, controls: manifest.controls });
+    return json({
+      schema: "tmg.work-request-receipt.v1",
+      requestId,
+      status: manifest.status,
+      controls: manifest.controls,
+    });
   }
 
   for (const file of manifest.files) {
@@ -377,31 +444,48 @@ async function completeWorkRequest(request: Request, env: SiteEnv, requestId: st
 }
 
 async function backendGet(env: SiteEnv, path: string): Promise<Response> {
-  return env.TMG_BACKEND.fetch(new Request(`https://tmg.internal${path}`, {
-    method: "GET",
-    headers: { accept: "application/json", "x-tmg-caller": "tolani-media-group-site" },
-  }));
+  return env.TMG_BACKEND.fetch(
+    new Request(`https://tmg.internal${path}`, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        "x-tmg-caller": "tolani-media-group-site",
+      },
+    }),
+  );
 }
 
 function publicStatusFromBootstrap(bootstrap: UnknownRecord): unknown {
   const runtime = asRecord(bootstrap.runtime);
   const release = asRecord(bootstrap.release);
+
   return {
     schema: "tmg.public-status.v1",
     site: { status: "ok", worker: "tolani-media-group-site" },
     backend: {
-      status: "reachable", worker: "tmg-video-services-production", service: asString(bootstrap.service),
-      publicStatusGate: asString(bootstrap.publicStatusGate), policyVersion: asString(runtime.policyVersion), syncContract: "ui-bootstrap-v1",
+      status: "reachable",
+      worker: "tmg-video-services-production",
+      service: asString(bootstrap.service),
+      publicStatusGate: asString(bootstrap.publicStatusGate),
+      policyVersion: asString(runtime.policyVersion),
+      syncContract: "ui-bootstrap-v1",
     },
     runtime: {
-      publicApiEnabled: asBoolean(runtime.publicApiEnabled), mcpEnabled: asBoolean(runtime.mcpEnabled),
-      ingestWorkflowEnabled: asBoolean(runtime.ingestWorkflowEnabled), externalProviderEgressEnabled: asBoolean(runtime.externalProviderEgressEnabled),
-      tenantUsageLedgerEnabled: asBoolean(runtime.tenantUsageLedgerEnabled), providerAcceptanceState: asString(runtime.providerAcceptanceState),
+      publicApiEnabled: asBoolean(runtime.publicApiEnabled),
+      mcpEnabled: asBoolean(runtime.mcpEnabled),
+      ingestWorkflowEnabled: asBoolean(runtime.ingestWorkflowEnabled),
+      externalProviderEgressEnabled: asBoolean(runtime.externalProviderEgressEnabled),
+      tenantUsageLedgerEnabled: asBoolean(runtime.tenantUsageLedgerEnabled),
+      providerAcceptanceState: asString(runtime.providerAcceptanceState),
     },
     release: {
-      status: asString(release.status), activationAuthorized: asBoolean(release.activationAuthorized), publicApiAuthorized: asBoolean(release.publicApiAuthorized),
-      mcpAuthorized: asBoolean(release.mcpAuthorized), ingestionAuthorized: asBoolean(release.ingestionAuthorized),
-      externalProviderEgressAuthorized: asBoolean(release.externalProviderEgressAuthorized), commercialUseAuthorized: asBoolean(release.commercialUseAuthorized),
+      status: asString(release.status),
+      activationAuthorized: asBoolean(release.activationAuthorized),
+      publicApiAuthorized: asBoolean(release.publicApiAuthorized),
+      mcpAuthorized: asBoolean(release.mcpAuthorized),
+      ingestionAuthorized: asBoolean(release.ingestionAuthorized),
+      externalProviderEgressAuthorized: asBoolean(release.externalProviderEgressAuthorized),
+      commercialUseAuthorized: asBoolean(release.commercialUseAuthorized),
     },
     synchronizedAt: new Date().toISOString(),
   };
@@ -412,12 +496,20 @@ function publicStatusFromHealth(health: UnknownRecord): unknown {
     schema: "tmg.public-status.v1",
     site: { status: "ok", worker: "tolani-media-group-site" },
     backend: {
-      status: "reachable", worker: "tmg-video-services-production", service: asString(health.service),
-      publicStatusGate: asString(health.publicStatusGate), policyVersion: asString(health.policyVersion), syncContract: "health-v1",
+      status: "reachable",
+      worker: "tmg-video-services-production",
+      service: asString(health.service),
+      publicStatusGate: asString(health.publicStatusGate),
+      policyVersion: asString(health.policyVersion),
+      syncContract: "health-v1",
     },
     runtime: {
-      publicApiEnabled: asBoolean(health.publicApiEnabled), mcpEnabled: asBoolean(health.mcpEnabled), ingestWorkflowEnabled: null,
-      externalProviderEgressEnabled: null, tenantUsageLedgerEnabled: null, providerAcceptanceState: "not_exposed_by_health_contract",
+      publicApiEnabled: asBoolean(health.publicApiEnabled),
+      mcpEnabled: asBoolean(health.mcpEnabled),
+      ingestWorkflowEnabled: null,
+      externalProviderEgressEnabled: null,
+      tenantUsageLedgerEnabled: null,
+      providerAcceptanceState: "not_exposed_by_health_contract",
     },
     release: null,
     synchronizedAt: new Date().toISOString(),
@@ -428,35 +520,55 @@ async function buildPublicStatus(env: SiteEnv): Promise<Response> {
   try {
     const bootstrapResponse = await backendGet(env, "/v1/ui/bootstrap");
     if (bootstrapResponse.ok) return json(publicStatusFromBootstrap(asRecord(await bootstrapResponse.json())));
+
     const healthResponse = await backendGet(env, "/health");
     if (healthResponse.ok) return json(publicStatusFromHealth(asRecord(await healthResponse.json())));
-    return json({
-      schema: "tmg.public-status.v1",
-      site: { status: "ok", worker: "tolani-media-group-site" },
-      backend: { status: "degraded", worker: "tmg-video-services-production", bootstrapHttpStatus: bootstrapResponse.status, healthHttpStatus: healthResponse.status },
-    }, 503);
+
+    return json(
+      {
+        schema: "tmg.public-status.v1",
+        site: { status: "ok", worker: "tolani-media-group-site" },
+        backend: {
+          status: "degraded",
+          worker: "tmg-video-services-production",
+          bootstrapHttpStatus: bootstrapResponse.status,
+          healthHttpStatus: healthResponse.status,
+        },
+      },
+      503,
+    );
   } catch (error) {
-    console.error(JSON.stringify({ level: "error", event: "public_site_backend_sync_failed", message: error instanceof Error ? error.message : "unknown_error" }));
-    return json({
-      schema: "tmg.public-status.v1",
-      site: { status: "ok", worker: "tolani-media-group-site" },
-      backend: { status: "unavailable", worker: "tmg-video-services-production" },
-    }, 503);
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "public_site_backend_sync_failed",
+        message: error instanceof Error ? error.message : "unknown_error",
+      }),
+    );
+    return json(
+      {
+        schema: "tmg.public-status.v1",
+        site: { status: "ok", worker: "tolani-media-group-site" },
+        backend: { status: "unavailable", worker: "tmg-video-services-production" },
+      },
+      503,
+    );
   }
 }
 
 export default {
   async fetch(request: Request, env: SiteEnv): Promise<Response> {
     const url = new URL(request.url);
+
     if (request.method === "GET" && url.pathname === "/status.json") return buildPublicStatus(env);
     if (request.method === "GET" && url.pathname === "/work-requests/config") return intakeConfig(env);
     if (request.method === "POST" && url.pathname === "/work-requests") return startWorkRequest(request, env);
 
     const fileMatch = url.pathname.match(/^\/work-requests\/(wr_[^/]+)\/files\/(file_[^/]+)$/);
-    if (request.method === "PUT" && fileMatch) return uploadWorkRequestFile(request, env, fileMatch[1], fileMatch[2]);
+    if (request.method === "PUT" && fileMatch) return uploadWorkRequestFile(request, env, fileMatch[1]!, fileMatch[2]!);
 
     const completeMatch = url.pathname.match(/^\/work-requests\/(wr_[^/]+)\/complete$/);
-    if (request.method === "POST" && completeMatch) return completeWorkRequest(request, env, completeMatch[1]);
+    if (request.method === "POST" && completeMatch) return completeWorkRequest(request, env, completeMatch[1]!);
 
     return env.ASSETS.fetch(request);
   },
