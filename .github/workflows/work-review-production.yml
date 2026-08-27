@@ -11,6 +11,7 @@ on:
       - "src/work-request-processing-workflow.ts"
       - "wrangler.review.jsonc"
       - "scripts/ensure-work-review-access.mjs"
+      - "scripts/work-review-production-canary.mjs"
       - ".github/workflows/work-review-production.yml"
   workflow_dispatch:
 
@@ -94,6 +95,9 @@ jobs:
           if (result.application?.type !== "self_hosted") throw new Error("Review Access app must be self_hosted");
           if (result.policy?.decision !== "allow" || result.policy?.selector !== "cloudflare_account_member") throw new Error("Review Access policy selector mismatch");
           NODE
+
+      - name: Prove durable workflow writes customer live-view context
+        run: node scripts/work-review-production-canary.mjs
 
       - name: Verify public denial and existing production isolation
         shell: bash
