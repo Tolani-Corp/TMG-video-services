@@ -13,6 +13,10 @@ function decodeKey(url: URL): string | null {
   }
 }
 
+function reviewEnv(env: Env): ReviewEnv {
+  return env as unknown as ReviewEnv;
+}
+
 function metadataHeaders(object: R2Object): Headers {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -24,7 +28,8 @@ function metadataHeaders(object: R2Object): Headers {
   return headers;
 }
 
-async function workRequestR2(request: Request, env: ReviewEnv): Promise<Response> {
+async function workRequestR2(request: Request, rawEnv: Env): Promise<Response> {
+  const env = reviewEnv(rawEnv);
   const url = new URL(request.url);
   const key = decodeKey(url);
   if (!key || !key.startsWith("quarantine/")) return new Response("invalid_key", { status: 400 });
@@ -38,7 +43,8 @@ async function workRequestR2(request: Request, env: ReviewEnv): Promise<Response
   return new Response(object.body, { headers: metadataHeaders(object) });
 }
 
-async function derivativeR2(request: Request, env: ReviewEnv): Promise<Response> {
+async function derivativeR2(request: Request, rawEnv: Env): Promise<Response> {
+  const env = reviewEnv(rawEnv);
   const url = new URL(request.url);
   const key = decodeKey(url);
   if (!key || !key.startsWith("derived/")) return new Response("invalid_key", { status: 400 });
