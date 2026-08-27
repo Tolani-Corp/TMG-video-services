@@ -145,11 +145,21 @@ jobs:
           if (status.site?.worker !== "tolani-media-group-site" || status.site?.status !== "ok") failures.push("public site Worker not synchronized");
           if (status.backend?.worker !== "tmg-video-services-production" || status.backend?.status !== "reachable") failures.push("private backend Worker is not reachable through Service Binding");
           if (status.backend?.publicStatusGate !== "G0") failures.push("unexpected public product gate");
-          for (const flag of ["publicApiEnabled", "mcpEnabled", "ingestWorkflowEnabled", "externalProviderEgressEnabled"]) {
+          if (!["ui-bootstrap-v1", "health-v1"].includes(status.backend?.syncContract)) failures.push("unsupported backend sync contract");
+          for (const flag of ["publicApiEnabled", "mcpEnabled"]) {
             if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
           }
-          for (const flag of ["activationAuthorized", "publicApiAuthorized", "mcpAuthorized", "ingestionAuthorized", "externalProviderEgressAuthorized", "commercialUseAuthorized"]) {
-            if (status.release?.[flag] !== false) failures.push(`${flag} unexpectedly authorized`);
+          if (status.backend?.syncContract === "ui-bootstrap-v1") {
+            for (const flag of ["ingestWorkflowEnabled", "externalProviderEgressEnabled"]) {
+              if (status.runtime?.[flag] !== false) failures.push(`${flag} unexpectedly enabled`);
+            }
+            for (const flag of ["activationAuthorized", "publicApiAuthorized", "mcpAuthorized", "ingestionAuthorized", "externalProviderEgressAuthorized", "commercialUseAuthorized"]) {
+              if (status.release?.[flag] !== false) failures.push(`${flag} unexpectedly authorized`);
+            }
+          } else {
+            if (status.runtime?.ingestWorkflowEnabled !== null) failures.push("health-v1 must not invent ingestion runtime state");
+            if (status.runtime?.externalProviderEgressEnabled !== null) failures.push("health-v1 must not invent provider-egress runtime state");
+            if (status.release !== null) failures.push("health-v1 must not invent release-authority state");
           }
           if (failures.length) throw new Error(failures.join("; "));
           console.log(JSON.stringify({
@@ -157,6 +167,7 @@ jobs:
             siteWorker: status.site.worker,
             backendWorker: status.backend.worker,
             backendStatus: status.backend.status,
+            syncContract: status.backend.syncContract,
             publicStatusGate: status.backend.publicStatusGate,
             policyVersion: status.backend.policyVersion,
             synchronizedAt: status.synchronizedAt,
