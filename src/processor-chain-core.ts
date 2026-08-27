@@ -263,7 +263,7 @@ export async function validateTechnicalAuthority(
 
 export async function withReceiptSha<T extends Record<string, unknown>>(receipt: Omit<T, "receiptSha256">): Promise<T> {
   const receiptSha256 = await sha256Json(receipt);
-  return { ...receipt, receiptSha256 } as T;
+  return { ...receipt, receiptSha256 } as unknown as T;
 }
 
 export async function validateReceiptSha(receipt: Record<string, unknown>): Promise<boolean> {
