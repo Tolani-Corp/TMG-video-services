@@ -20,11 +20,54 @@ const progressBar = document.querySelector('[data-progress-bar]');
 const progressText = document.querySelector('[data-progress-text]');
 const receipt = document.querySelector('[data-receipt]');
 
+const processingConsole = document.querySelector('[data-processing-console]');
+const processingReference = document.querySelector('[data-processing-reference]');
+const processingLive = document.querySelector('[data-processing-live]');
+const processingPercent = document.querySelector('[data-processing-percent]');
+const processingPhase = document.querySelector('[data-processing-phase]');
+const processingHeadline = document.querySelector('[data-processing-headline]');
+const processingSummary = document.querySelector('[data-processing-summary]');
+const processingUpdated = document.querySelector('[data-processing-updated]');
+const processingFiles = document.querySelector('[data-processing-files]');
+const processingAuthority = document.querySelector('[data-processing-authority]');
+const processingPublication = document.querySelector('[data-processing-publication]');
+const processingEgress = document.querySelector('[data-processing-egress]');
+const processingEvents = document.querySelector('[data-processing-events]');
+const processingOutcome = document.querySelector('[data-processing-outcome]');
+const outcomeHeadline = document.querySelector('[data-outcome-headline]');
+const outcomeSummary = document.querySelector('[data-outcome-summary]');
+const outcomeEvidence = document.querySelector('[data-outcome-evidence]');
+const outcomeDeliverables = document.querySelector('[data-outcome-deliverables]');
+const outcomeNextAction = document.querySelector('[data-outcome-next-action]');
+const pauseUpdates = document.querySelector('[data-processing-pause]');
+const refreshProcessing = document.querySelector('[data-processing-refresh]');
+const copyReference = document.querySelector('[data-processing-copy]');
+const downloadSnapshot = document.querySelector('[data-processing-download]');
+const newRequest = document.querySelector('[data-processing-new-request]');
+
+const TRACKING_KEY = 'tmg-work-request-tracking-v1';
 let intakeConfig = null;
 let selectedFiles = [];
+let tracking = {
+  requestId: null,
+  token: null,
+  paused: false,
+  timer: null,
+  lastStatus: null,
+  inFlight: false,
+};
 
 function setText(node, value) {
   if (node) node.textContent = value;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
 function runtimeLabel(value) {
@@ -83,6 +126,221 @@ function showReceipt(html, kind = 'success') {
   receipt.innerHTML = html;
 }
 
+function saveTracking() {
+  if (!tracking.requestId || !tracking.token) return;
+  try {
+    sessionStorage.setItem(TRACKING_KEY, JSON.stringify({ requestId: tracking.requestId, token: tracking.token }));
+  } catch {
+    // Session persistence is optional; live tracking still works in-memory.
+  }
+}
+
+function clearTracking() {
+  if (tracking.timer) clearTimeout(tracking.timer);
+  tracking = { requestId: null, token: null, paused: false, timer: null, lastStatus: null, inFlight: false };
+  try {
+    sessionStorage.removeItem(TRACKING_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+  if (processingConsole) processingConsole.hidden = true;
+}
+
+function restoreTracking() {
+  try {
+    const raw = sessionStorage.getItem(TRACKING_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (typeof saved?.requestId === 'string' && typeof saved?.token === 'string') {
+      startLiveTracking(saved.requestId, saved.token, false);
+    }
+  } catch {
+    try { sessionStorage.removeItem(TRACKING_KEY); } catch { /* no-op */ }
+  }
+}
+
+function liveLabel(status) {
+  if (tracking.paused) return 'Live updates paused';
+  const state = status?.lifecycle?.state;
+  if (state === 'terminal') return 'Final state recorded';
+  if (state === 'action_required') return 'Action checkpoint';
+  if (state === 'waiting') return 'Watching for workflow updates';
+  return 'Live workflow telemetry';
+}
+
+function renderStageRail(stages) {
+  const stageNodes = document.querySelectorAll('[data-processing-stage]');
+  stageNodes.forEach((node) => {
+    const key = node.getAttribute('data-processing-stage');
+    const stage = Array.isArray(stages) ? stages.find((item) => item?.key === key) : null;
+    node.dataset.stageState = stage?.state || 'pending';
+    const stateNode = node.querySelector('[data-stage-state]');
+    if (stateNode) stateNode.textContent = stage?.state === 'complete' ? 'Complete' : stage?.state === 'active' ? 'Active' : stage?.state === 'blocked' ? 'Closed' : 'Pending';
+  });
+}
+
+function renderEvents(events, fallback) {
+  if (!processingEvents) return;
+  processingEvents.replaceChildren();
+  const visible = Array.isArray(events) && events.length ? events.slice().reverse() : [{
+    title: fallback?.lifecycle?.headline || 'Waiting for workflow evidence',
+    detail: fallback?.lifecycle?.summary || 'No workflow event has been recorded yet.',
+    at: fallback?.updatedAt,
+    state: fallback?.lifecycle?.state || 'waiting',
+  }];
+
+  visible.forEach((event) => {
+    const item = document.createElement('li');
+    item.className = 'event-item';
+    const marker = document.createElement('span');
+    marker.className = 'event-marker';
+    marker.dataset.eventState = event?.state || 'observed';
+    const body = document.createElement('div');
+    const head = document.createElement('div');
+    head.className = 'event-head';
+    const title = document.createElement('strong');
+    title.textContent = event?.title || 'Workflow update';
+    const time = document.createElement('time');
+    time.textContent = event?.at ? new Date(event.at).toLocaleString() : 'Now';
+    head.append(title, time);
+    const detail = document.createElement('p');
+    detail.textContent = event?.detail || '';
+    body.append(head, detail);
+    item.append(marker, body);
+    processingEvents.append(item);
+  });
+}
+
+function renderKeyValueList(node, items, emptyText) {
+  if (!node) return;
+  node.replaceChildren();
+  if (!Array.isArray(items) || items.length === 0) {
+    const empty = document.createElement('li');
+    empty.textContent = emptyText;
+    node.append(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const li = document.createElement('li');
+    const label = document.createElement('strong');
+    label.textContent = item?.label || 'Item';
+    const value = document.createElement('span');
+    value.textContent = item?.value || item?.status || 'Recorded';
+    li.append(label, value);
+    node.append(li);
+  });
+}
+
+function renderOutcome(status) {
+  if (!processingOutcome) return;
+  const outcome = status?.outcome;
+  const shouldShow = Boolean(outcome) || status?.lifecycle?.state === 'terminal' || status?.lifecycle?.state === 'action_required';
+  processingOutcome.hidden = !shouldShow;
+  if (!shouldShow) return;
+
+  setText(outcomeHeadline, outcome?.headline || status?.lifecycle?.headline || 'Outcome pending');
+  setText(outcomeSummary, outcome?.summary || status?.lifecycle?.summary || 'No outcome summary has been recorded yet.');
+  renderKeyValueList(outcomeEvidence, outcome?.evidence, 'No outcome evidence has been published to this view yet.');
+  renderKeyValueList(outcomeDeliverables, outcome?.deliverables, 'No deliverables are available in this view yet.');
+  if (outcomeNextAction) {
+    outcomeNextAction.hidden = !outcome?.nextAction;
+    setText(outcomeNextAction, outcome?.nextAction || '');
+  }
+}
+
+function renderProcessingStatus(status) {
+  tracking.lastStatus = status;
+  if (processingConsole) {
+    processingConsole.hidden = false;
+    processingConsole.dataset.processingState = status?.lifecycle?.state || 'waiting';
+  }
+  setText(processingReference, status?.requestId || tracking.requestId || '—');
+  setText(processingLive, liveLabel(status));
+  setText(processingPercent, `${Number(status?.lifecycle?.progress || 0)}%`);
+  setText(processingPhase, String(status?.lifecycle?.phase || status?.status || 'waiting').replaceAll('_', ' '));
+  setText(processingHeadline, status?.lifecycle?.headline || 'Workflow status unavailable');
+  setText(processingSummary, status?.lifecycle?.summary || 'The current request state could not be summarized.');
+  setText(processingUpdated, status?.updatedAt ? new Date(status.updatedAt).toLocaleString() : 'Unknown');
+
+  const files = status?.context?.files;
+  setText(processingFiles, files ? `${files.uploaded}/${files.total} secured` : '—');
+  setText(processingAuthority, status?.context?.controls?.processingAuthorized ? 'Authorized' : 'Gated');
+  setText(processingPublication, status?.context?.controls?.publicationAuthorized ? 'Authorized' : 'Gated');
+  setText(processingEgress, status?.context?.controls?.externalProviderEgressAuthorized ? 'Authorized' : 'Gated');
+
+  const ring = document.querySelector('[data-processing-ring]');
+  if (ring) ring.style.setProperty('--processing-progress', `${Math.max(0, Math.min(100, Number(status?.lifecycle?.progress || 0)))}%`);
+  renderStageRail(status?.lifecycle?.stages);
+  renderEvents(status?.events, status);
+  renderOutcome(status);
+  if (pauseUpdates) pauseUpdates.textContent = tracking.paused ? 'Resume live updates' : 'Pause live updates';
+}
+
+function nextPollDelay(status) {
+  if (tracking.paused || status?.lifecycle?.state === 'terminal') return 0;
+  if (status?.lifecycle?.state === 'waiting') return 12000;
+  return 5000;
+}
+
+function scheduleProcessingPoll(status) {
+  if (tracking.timer) clearTimeout(tracking.timer);
+  tracking.timer = null;
+  const delay = nextPollDelay(status);
+  if (delay > 0) tracking.timer = setTimeout(() => pollProcessingStatus(false), delay);
+}
+
+async function pollProcessingStatus(force = false) {
+  if (!tracking.requestId || !tracking.token || tracking.inFlight) return;
+  if (tracking.paused && !force) return;
+  tracking.inFlight = true;
+  try {
+    const response = await fetch(`/work-requests/${encodeURIComponent(tracking.requestId)}/status`, {
+      headers: { accept: 'application/json', 'x-work-request-token': tracking.token },
+      cache: 'no-store',
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 429) {
+        setText(processingLive, 'Live updates throttled · retrying');
+        if (tracking.timer) clearTimeout(tracking.timer);
+        tracking.timer = setTimeout(() => pollProcessingStatus(false), 15000);
+        return;
+      }
+      throw new Error(body.error || `status ${response.status}`);
+    }
+    renderProcessingStatus(body);
+    scheduleProcessingPoll(body);
+  } catch (error) {
+    setText(processingLive, 'Live status temporarily unavailable');
+    setText(processingSummary, error instanceof Error ? error.message : 'Unable to refresh workflow state.');
+    if (!tracking.paused) {
+      if (tracking.timer) clearTimeout(tracking.timer);
+      tracking.timer = setTimeout(() => pollProcessingStatus(false), 15000);
+    }
+  } finally {
+    tracking.inFlight = false;
+  }
+}
+
+function startLiveTracking(requestId, token, scroll = true) {
+  if (!requestId || !token) return;
+  if (tracking.timer) clearTimeout(tracking.timer);
+  tracking.requestId = requestId;
+  tracking.token = token;
+  tracking.paused = false;
+  tracking.timer = null;
+  tracking.lastStatus = null;
+  saveTracking();
+  if (processingConsole) {
+    processingConsole.hidden = false;
+    processingConsole.dataset.processingState = 'active';
+  }
+  setText(processingReference, requestId);
+  setText(processingLive, 'Connecting to live workflow status…');
+  if (scroll && processingConsole) processingConsole.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  pollProcessingStatus(true);
+}
+
 async function syncStatus() {
   try {
     const response = await fetch('/status.json', { headers: { accept: 'application/json' }, cache: 'no-store' });
@@ -129,11 +387,11 @@ function addFiles(files) {
     if (next.length >= intakeConfig.maxFiles) break;
     const type = mimeForFile(file);
     if (!intakeConfig.allowedTypes.includes(type)) {
-      showReceipt(`<strong>${file.name}</strong> is not an accepted file type.`, 'error');
+      showReceipt(`<strong>${escapeHtml(file.name)}</strong> is not an accepted file type.`, 'error');
       continue;
     }
     if (file.size < 1 || file.size > intakeConfig.maxFileBytes) {
-      showReceipt(`<strong>${file.name}</strong> exceeds the ${humanBytes(intakeConfig.maxFileBytes)} per-file limit.`, 'error');
+      showReceipt(`<strong>${escapeHtml(file.name)}</strong> exceeds the ${humanBytes(intakeConfig.maxFileBytes)} per-file limit.`, 'error');
       continue;
     }
     if (!next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) next.push(file);
@@ -185,6 +443,8 @@ async function submitWorkRequest(event) {
     const startBody = await start.json().catch(() => ({}));
     if (!start.ok) throw new Error(startBody.error || `request start failed (${start.status})`);
 
+    startLiveTracking(startBody.requestId, startBody.uploadToken, false);
+
     for (let index = 0; index < selectedFiles.length; index += 1) {
       const file = selectedFiles[index];
       const remote = startBody.files[index];
@@ -208,13 +468,15 @@ async function submitWorkRequest(event) {
     if (!complete.ok) throw new Error(completeBody.error || `completion failed (${complete.status})`);
 
     setProgress(100, 'Work request received for human review.');
-    showReceipt(`<strong>Request received.</strong><span>Reference: <code>${completeBody.requestId}</code></span><span>Status: received · unreviewed</span><span>No processing or publication authority has been granted.</span>`);
+    showReceipt(`<strong>Request received.</strong><span>Reference: <code>${escapeHtml(completeBody.requestId)}</code></span><span>Status: received · unreviewed</span><span>The live processing window is tracking this request below.</span>`);
     requestForm.reset();
     selectedFiles = [];
     renderFiles();
+    await pollProcessingStatus(true);
+    if (processingConsole) processingConsole.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
     setProgress(0, 'Submission stopped. No additional files will be uploaded.');
-    showReceipt(`<strong>Work request not completed.</strong><span>${error instanceof Error ? error.message : 'Unknown submission error'}</span>`, 'error');
+    showReceipt(`<strong>Work request not completed.</strong><span>${escapeHtml(error instanceof Error ? error.message : 'Unknown submission error')}</span>`, 'error');
   } finally {
     if (submitRequest) submitRequest.disabled = intakeConfig?.enabled !== true;
   }
@@ -231,7 +493,40 @@ if (dropzone) {
   });
 }
 if (requestForm) requestForm.addEventListener('submit', submitWorkRequest);
+if (pauseUpdates) pauseUpdates.addEventListener('click', () => {
+  tracking.paused = !tracking.paused;
+  if (tracking.timer) clearTimeout(tracking.timer);
+  tracking.timer = null;
+  setText(processingLive, liveLabel(tracking.lastStatus));
+  pauseUpdates.textContent = tracking.paused ? 'Resume live updates' : 'Pause live updates';
+  if (!tracking.paused) pollProcessingStatus(true);
+});
+if (refreshProcessing) refreshProcessing.addEventListener('click', () => pollProcessingStatus(true));
+if (copyReference) copyReference.addEventListener('click', async () => {
+  if (!tracking.requestId) return;
+  try {
+    await navigator.clipboard.writeText(tracking.requestId);
+    copyReference.textContent = 'Reference copied';
+    setTimeout(() => { copyReference.textContent = 'Copy reference'; }, 1600);
+  } catch {
+    copyReference.textContent = tracking.requestId;
+  }
+});
+if (downloadSnapshot) downloadSnapshot.addEventListener('click', () => {
+  if (!tracking.lastStatus) return;
+  const blob = new Blob([JSON.stringify(tracking.lastStatus, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${tracking.requestId || 'tmg-work-request'}-status.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+});
+if (newRequest) newRequest.addEventListener('click', () => clearTracking());
 
 syncStatus();
 loadIntakeConfig();
+restoreTracking();
 setInterval(syncStatus, 60000);
