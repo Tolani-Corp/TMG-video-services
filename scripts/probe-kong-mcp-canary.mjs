@@ -3,6 +3,7 @@ import fs from "node:fs";
 const baseUrl = process.env.TMG_KONG_CANARY_URL?.replace(/\/$/, "");
 const expectedSha = process.env.TMG_KONG_CANARY_SHA;
 const output = process.env.TMG_KONG_CANARY_EVIDENCE ?? "tmg-kong-mcp-upstream-evidence.json";
+const protocolVersion = "2026-07-28";
 if (!baseUrl || !expectedSha) {
   console.error("TMG_KONG_CANARY_URL and TMG_KONG_CANARY_SHA are required");
   process.exit(2);
@@ -12,7 +13,7 @@ async function mcpPost(body, sessionId) {
   const headers = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
-    "mcp-protocol-version": "2025-03-26",
+    "mcp-protocol-version": protocolVersion,
   };
   if (sessionId) headers["mcp-session-id"] = sessionId;
   const response = await fetch(`${baseUrl}/mcp`, { method: "POST", headers, body: JSON.stringify(body) });
@@ -40,9 +41,10 @@ const init = await mcpPost({
   jsonrpc: "2.0",
   id: 1,
   method: "initialize",
-  params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "tmg-kong-canary", version: "1.0.0" } },
+  params: { protocolVersion, capabilities: {}, clientInfo: { name: "tmg-kong-canary", version: "1.0.0" } },
 });
 if (!init.response.ok || !init.payload?.result) throw new Error(`initialize failed: ${init.response.status} ${init.text.slice(0, 300)}`);
+if (init.payload.result.protocolVersion !== protocolVersion) throw new Error(`protocol negotiation mismatch: ${init.payload.result.protocolVersion} != ${protocolVersion}`);
 const sessionId = init.response.headers.get("mcp-session-id");
 
 const initialized = await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized" }, sessionId);
@@ -64,6 +66,7 @@ const evidence = {
   health,
   mcp: {
     initializeStatus: init.response.status,
+    requestedProtocolVersion: protocolVersion,
     protocolVersion: init.payload.result.protocolVersion,
     sessionEstablished: Boolean(sessionId),
     toolsListStatus: tools.response.status,
