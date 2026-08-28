@@ -1,0 +1,137 @@
+name: TMG Kong MCP Upstream Canary v1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/kong-mcp-canary.ts"
+      - "scripts/render-kong-mcp-canary-config.mjs"
+      - "scripts/kong-mcp-canary-policy-check.mjs"
+      - "scripts/probe-kong-mcp-canary.mjs"
+      - "config/kong-mcp-canary-request.json"
+      - ".github/workflows/kong-mcp-upstream-canary.yml"
+  push:
+    branches: [main]
+    paths:
+      - "config/kong-mcp-canary-request.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmg-kong-mcp-upstream-canary
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    name: Validate TMG Kong MCP canary contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Validate request and canary guards
+        env:
+          TMG_KONG_CANARY_WORKER: tmg-video-kong-mcp-canary
+          TMG_KONG_CANARY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TMG_KONG_CANARY_ID: contract-${{ github.run_id }}
+        run: |
+          node scripts/kong-mcp-canary-policy-check.mjs
+          node scripts/render-kong-mcp-canary-config.mjs
+          pnpm exec wrangler types /tmp/kong-mcp-canary-types.d.ts --config .wrangler.kong-mcp-canary.json
+          pnpm typecheck
+          pnpm test
+
+  live:
+    name: Controlled TMG Kong MCP canary
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: contracts
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      TMG_KONG_CANARY_WORKER: tmg-video-kong-mcp-canary
+      TMG_KONG_CANARY_SHA: ${{ github.sha }}
+      TMG_KONG_CANARY_ID: tmg-kong-${{ github.run_id }}-${{ github.run_attempt }}
+      TMG_KONG_CANARY_EVIDENCE: tmg-kong-mcp-upstream-evidence.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Verify runtime authority
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "missing CLOUDFLARE_API_TOKEN" >&2; exit 2; }
+          node scripts/kong-mcp-canary-policy-check.mjs
+          mode="$(node -p 'JSON.parse(require("fs").readFileSync("config/kong-mcp-canary-request.json","utf8")).mode')"
+          confirmation="$(node -p 'JSON.parse(require("fs").readFileSync("config/kong-mcp-canary-request.json","utf8")).confirmation')"
+          if [ "$mode" = deploy ]; then expected='DEPLOY TMG KONG MCP CANARY'; else expected='ROLLBACK TMG KONG MCP CANARY'; fi
+          test "$confirmation" = "$expected" || { echo "confirmation mismatch" >&2; exit 2; }
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("config/kong-mcp-canary-request.json","utf8")); fs.writeFileSync("tmg-kong-mcp-request-effective.json",JSON.stringify({...r,githubSha:process.env.GITHUB_SHA,githubRunId:process.env.GITHUB_RUN_ID},null,2)+"\n")'
+      - name: Render exact-SHA canary config
+        run: node scripts/render-kong-mcp-canary-config.mjs
+      - name: Deploy isolated MCP discovery Worker
+        if: steps.request.outputs.mode == 'deploy'
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --config .wrangler.kong-mcp-canary.json 2>&1 | tee tmg-kong-mcp-deploy.txt
+          url="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' tmg-kong-mcp-deploy.txt | tail -1 || true)"
+          test -n "$url" || { echo "workers.dev URL not found in deploy evidence" >&2; exit 2; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "$url" > tmg-kong-mcp-worker-url.txt
+      - name: Prove exact SHA and MCP discovery only
+        if: steps.request.outputs.mode == 'deploy'
+        env:
+          TMG_KONG_CANARY_URL: ${{ steps.deploy.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error "${TMG_KONG_CANARY_URL}/health" >/dev/null; then break; fi
+            sleep 2
+          done
+          node scripts/probe-kong-mcp-canary.mjs
+      - name: Delete canary Worker
+        if: steps.request.outputs.mode == 'rollback'
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'y\n' | pnpm exec wrangler delete --name "${TMG_KONG_CANARY_WORKER}" --config .wrangler.kong-mcp-canary.json 2>&1 | tee tmg-kong-mcp-rollback.txt
+          node -e 'const fs=require("fs"); fs.writeFileSync("tmg-kong-mcp-rollback-receipt.json",JSON.stringify({schema:"tolani.tmg.kong-mcp-upstream-rollback.v1",worker:process.env.TMG_KONG_CANARY_WORKER,githubSha:process.env.GITHUB_SHA,deleted:true,productionAuthority:false},null,2)+"\n")'
+      - name: Upload canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-kong-mcp-upstream-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            tmg-kong-mcp-request-effective.json
+            tmg-kong-mcp-deploy.txt
+            tmg-kong-mcp-worker-url.txt
+            tmg-kong-mcp-upstream-evidence.json
+            tmg-kong-mcp-rollback.txt
+            tmg-kong-mcp-rollback-receipt.json
