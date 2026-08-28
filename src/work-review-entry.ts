@@ -9,10 +9,10 @@ export { MediaExecutionContainer } from "./media-execution-container";
 const enhancedReviewWorker = {
   async fetch(request: Request, env: ReviewEnv, ctx: ExecutionContext): Promise<Response> {
     const response = await reviewWorker.fetch(request, env, ctx);
-    if (!response.ok) return response;
-
     const url = new URL(request.url);
+
     if (request.method === "GET" && url.pathname === "/assets/review-chain.js") {
+      if (response.status !== 404) return response;
       return new Response(REVIEW_CHAIN_JS, {
         headers: {
           "content-type": "text/javascript; charset=utf-8",
@@ -23,6 +23,8 @@ const enhancedReviewWorker = {
         },
       });
     }
+
+    if (!response.ok) return response;
 
     if (request.method === "GET" && url.pathname === "/") {
       const html = await response.text();
