@@ -45,9 +45,10 @@ jobs:
         run: |
           node scripts/kong-mcp-canary-policy-check.mjs
           node scripts/render-kong-mcp-canary-config.mjs
-          pnpm exec wrangler types /tmp/kong-mcp-canary-types.d.ts --config .wrangler.kong-mcp-canary.json
+          pnpm cf-typegen
           pnpm typecheck
           pnpm test
+          pnpm exec wrangler deploy --config .wrangler.kong-mcp-canary.json --dry-run --outdir .kong-mcp-canary-dry-run
 
   live:
     name: Controlled TMG Kong MCP canary
