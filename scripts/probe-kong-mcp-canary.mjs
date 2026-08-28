@@ -4,24 +4,55 @@ const baseUrl = process.env.TMG_KONG_CANARY_URL?.replace(/\/$/, "");
 const expectedSha = process.env.TMG_KONG_CANARY_SHA;
 const output = process.env.TMG_KONG_CANARY_EVIDENCE ?? "tmg-kong-mcp-upstream-evidence.json";
 const protocolVersion = "2026-07-28";
+const clientInfo = { name: "tmg-kong-canary", version: "1.0.0" };
+const clientCapabilities = {};
+
 if (!baseUrl || !expectedSha) {
   console.error("TMG_KONG_CANARY_URL and TMG_KONG_CANARY_SHA are required");
   process.exit(2);
 }
 
-async function mcpPost(body, sessionId) {
+function requestMeta() {
+  return {
+    "io.modelcontextprotocol/protocolVersion": protocolVersion,
+    "io.modelcontextprotocol/clientInfo": clientInfo,
+    "io.modelcontextprotocol/clientCapabilities": clientCapabilities,
+  };
+}
+
+async function mcpPost({ method, id, params = {}, name }) {
   const headers = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
     "mcp-protocol-version": protocolVersion,
+    "mcp-method": method,
   };
-  if (sessionId) headers["mcp-session-id"] = sessionId;
-  const response = await fetch(`${baseUrl}/mcp`, { method: "POST", headers, body: JSON.stringify(body) });
+  if (name) headers["mcp-name"] = name;
+
+  const body = {
+    jsonrpc: "2.0",
+    ...(id !== undefined ? { id } : {}),
+    method,
+    params: {
+      ...params,
+      _meta: requestMeta(),
+    },
+  };
+
+  const response = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
   const text = await response.text();
   let payload = null;
   if (text.trim()) {
     if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-      const data = text.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).find(Boolean);
+      const data = text
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .find(Boolean);
       if (data) payload = JSON.parse(data);
     } else {
       payload = JSON.parse(text);
@@ -37,26 +68,44 @@ if (health.deployedSha !== expectedSha) throw new Error(`deployed SHA mismatch: 
 if (health.mcpEnabled !== true || health.publicApiEnabled !== false) throw new Error("runtime gate mismatch");
 if (health.toolExecutionEnabled !== false || health.dataBindingsPresent !== false || health.productionAuthority !== false) throw new Error("authority guard mismatch");
 
-const init = await mcpPost({
-  jsonrpc: "2.0",
-  id: 1,
-  method: "initialize",
-  params: { protocolVersion, capabilities: {}, clientInfo: { name: "tmg-kong-canary", version: "1.0.0" } },
-});
-if (!init.response.ok || !init.payload?.result) throw new Error(`initialize failed: ${init.response.status} ${init.text.slice(0, 300)}`);
-if (init.payload.result.protocolVersion !== protocolVersion) throw new Error(`protocol negotiation mismatch: ${init.payload.result.protocolVersion} != ${protocolVersion}`);
-const sessionId = init.response.headers.get("mcp-session-id");
+const discover = await mcpPost({ method: "server/discover", id: "discover-1" });
+if (!discover.response.ok || !discover.payload?.result) {
+  throw new Error(`server/discover failed: ${discover.response.status} ${discover.text.slice(0, 300)}`);
+}
+const supportedVersions = Array.isArray(discover.payload.result.supportedVersions)
+  ? [...discover.payload.result.supportedVersions]
+  : [];
+if (!supportedVersions.includes(protocolVersion)) {
+  throw new Error(`server/discover did not advertise ${protocolVersion}: ${supportedVersions.join(",")}`);
+}
+if (!discover.payload.result.capabilities?.tools) {
+  throw new Error("server/discover did not advertise tools capability");
+}
+if (discover.response.headers.get("mcp-session-id")) {
+  throw new Error("modern MCP canary unexpectedly established a protocol session");
+}
 
-const initialized = await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized" }, sessionId);
-if (!initialized.response.ok) throw new Error(`initialized notification failed: ${initialized.response.status}`);
-
-const tools = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, sessionId);
-if (!tools.response.ok || !Array.isArray(tools.payload?.result?.tools)) throw new Error(`tools/list failed: ${tools.response.status} ${tools.text.slice(0, 300)}`);
+const tools = await mcpPost({ method: "tools/list", id: 2 });
+if (!tools.response.ok || !Array.isArray(tools.payload?.result?.tools)) {
+  throw new Error(`tools/list failed: ${tools.response.status} ${tools.text.slice(0, 300)}`);
+}
 const toolNames = tools.payload.result.tools.map((tool) => tool.name).sort();
-if (JSON.stringify(toolNames) !== JSON.stringify(["search_video_moments"])) throw new Error(`unexpected tools: ${toolNames.join(",")}`);
+if (JSON.stringify(toolNames) !== JSON.stringify(["search_video_moments"])) {
+  throw new Error(`unexpected tools: ${toolNames.join(",")}`);
+}
+if (tools.response.headers.get("mcp-session-id")) {
+  throw new Error("tools/list unexpectedly returned a protocol session");
+}
 
-const denied = await mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "search_video_moments", arguments: {} } }, sessionId);
-if (denied.response.status !== 403) throw new Error(`tools/call must fail 403 at upstream canary; got ${denied.response.status}`);
+const denied = await mcpPost({
+  method: "tools/call",
+  id: 3,
+  name: "search_video_moments",
+  params: { name: "search_video_moments", arguments: {} },
+});
+if (denied.response.status !== 403) {
+  throw new Error(`tools/call must fail 403 at upstream canary; got ${denied.response.status}`);
+}
 
 const evidence = {
   schema: "tolani.tmg.kong-mcp-upstream-evidence.v1",
@@ -65,10 +114,12 @@ const evidence = {
   deployedSha: expectedSha,
   health,
   mcp: {
-    initializeStatus: init.response.status,
-    requestedProtocolVersion: protocolVersion,
-    protocolVersion: init.payload.result.protocolVersion,
-    sessionEstablished: Boolean(sessionId),
+    protocolVersion,
+    protocolEra: "modern-stateless",
+    discoveryStatus: discover.response.status,
+    supportedVersions,
+    serverCapabilities: discover.payload.result.capabilities,
+    sessionEstablished: false,
     toolsListStatus: tools.response.status,
     tools: toolNames,
     toolCallDeniedStatus: denied.response.status,
