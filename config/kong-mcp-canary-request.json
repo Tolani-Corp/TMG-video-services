@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "request_id": "tmg-kong-mcp-upstream-canary-2026-08-27-003",
-  "mode": "deploy",
-  "confirmation": "DEPLOY TMG KONG MCP CANARY",
+  "request_id": "tmg-kong-mcp-upstream-canary-rollback-2026-08-27-004",
+  "mode": "rollback",
+  "confirmation": "ROLLBACK TMG KONG MCP CANARY",
   "authority": "reviewed-gitops-request",
-  "source_parent_sha": "418cb6b85b2dcbf019b6693c68689a34cfc206b9",
+  "source_parent_sha": "67a6c9f1d4c2a9ce6741eb7ee778c79c4a4643a7",
   "worker_name": "tmg-video-kong-mcp-canary",
   "environment": "development",
   "mutation_authority": true,
   "authorized_mutations": [
-    "deploy or replace the single Cloudflare Worker named tmg-video-kong-mcp-canary from the merged request SHA"
+    "delete only the Cloudflare Worker named tmg-video-kong-mcp-canary"
   ],
   "required_runtime": {
     "workers_dev": true,
@@ -23,19 +23,17 @@
     "mcp_protocol_era": "modern-stateless"
   },
   "acceptance": [
-    "health must read back the exact merged Git SHA",
-    "health must prove MCP enabled and public API disabled",
-    "health must prove tool execution disabled and no data bindings present",
-    "server/discover must advertise protocol version 2026-07-28 and tools capability",
-    "modern requests must remain stateless with no MCP session ID",
-    "tools/list must expose exactly search_video_moments",
-    "tools/call must be rejected by the upstream canary",
-    "artifact must contain Worker URL, deployment SHA, health evidence, MCP discovery evidence, and rollback-required=true"
+    "the rollback executes only in the protected development environment",
+    "the target Worker name is exactly tmg-video-kong-mcp-canary",
+    "Wrangler delete completes successfully",
+    "a rollback receipt records the reviewed merged SHA and deleted=true",
+    "no production Worker, route, DNS, data binding, media, rights, billing, publication, or tool authority is changed"
   ],
   "explicitly_not_authorized": [
+    "deployment or replacement of any Worker",
     "production Worker mutation",
     "production route or DNS mutation",
-    "R2, Vectorize, Workflow, Durable Object, database, or media binding creation",
+    "R2, Vectorize, Workflow, Durable Object, database, or media binding mutation",
     "external provider egress",
     "tool execution",
     "publication authority",
