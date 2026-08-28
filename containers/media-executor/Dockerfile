@@ -5,7 +5,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY containers/media-executor/server.mjs /app/server.mjs
+COPY server.mjs /app/server.mjs
 
 ENV NODE_ENV=production
 ENV PORT=8080
