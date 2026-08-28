@@ -8,12 +8,20 @@ on:
       - "src/work-review-core.ts"
       - "src/work-review-entry.ts"
       - "src/work-review-ui.ts"
+      - "src/work-review-chain-ui.ts"
       - "src/work-request-processing-workflow.ts"
       - "src/processor-authority.ts"
+      - "src/processor-chain-core.ts"
+      - "src/processor-chain-workflow.ts"
+      - "src/processor-chain-review-actions.ts"
+      - "src/media-execution-container.ts"
+      - "src/governed-output-gates.ts"
+      - "containers/media-executor/**"
       - "wrangler.review.jsonc"
       - "scripts/ensure-work-review-access.mjs"
       - "scripts/work-review-production-canary.mjs"
       - "scripts/processor-authority-production-canary.mjs"
+      - "scripts/processor-chain-v1-1-production-canary.mjs"
       - ".github/workflows/work-review-production.yml"
   workflow_dispatch:
 
@@ -29,7 +37,7 @@ jobs:
     if: ${{ github.repository == 'Tolani-Corp/TMG-video-services' }}
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
@@ -48,11 +56,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Validate review authority boundary
+      - name: Ensure private derivative and publication buckets exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          for bucket in tmg-work-derivatives-prod tmg-published-media-prod; do
+            if ! pnpm exec wrangler r2 bucket info "$bucket" --json >/dev/null 2>&1; then
+              pnpm exec wrangler r2 bucket create "$bucket"
+            fi
+            pnpm exec wrangler r2 bucket info "$bucket" --json > "${bucket}.json"
+            BUCKET_JSON="$(cat "${bucket}.json")" EXPECTED_BUCKET="$bucket" node --input-type=module - <<'NODE'
+            const value = JSON.parse(process.env.BUCKET_JSON || "{}");
+            const name = value.name ?? value.bucket?.name ?? value.result?.name;
+            if (name !== process.env.EXPECTED_BUCKET) throw new Error(`R2 bucket identity mismatch: ${name}`);
+            NODE
+          done
+
+      - name: Validate review authority and execution boundary
         shell: bash
         run: |
           set -euo pipefail
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN is missing" >&2; exit 2; }
+          docker version >/dev/null
           node --input-type=module - <<'NODE'
           import fs from "node:fs";
           const review = JSON.parse(fs.readFileSync("wrangler.review.jsonc", "utf8"));
@@ -61,23 +86,32 @@ jobs:
           if (review.main !== "src/work-review-entry.ts") throw new Error("Review Worker entrypoint mismatch");
           if (review.workers_dev !== false) throw new Error("Review Worker must not expose workers.dev");
           if (review.routes?.length !== 1 || review.routes[0]?.pattern !== "review.tolanimediagroup.com" || review.routes[0]?.custom_domain !== true) throw new Error("Review Worker custom domain mismatch");
-          if (review.r2_buckets?.length !== 1 || review.r2_buckets[0]?.binding !== "WORK_REQUESTS" || review.r2_buckets[0]?.bucket_name !== "tmg-work-requests-prod") throw new Error("Review Worker must bind only the governed work-request bucket");
-          if (review.workflows?.length !== 1 || review.workflows[0]?.binding !== "WORK_REQUEST_PROCESSOR" || review.workflows[0]?.name !== "tmg-work-request-processing-prod" || review.workflows[0]?.class_name !== "WorkRequestProcessingWorkflow") throw new Error("Review workflow binding mismatch");
-          if (!fs.existsSync("src/processor-authority.ts")) throw new Error("Processor authority implementation missing");
-          if (!fs.existsSync("scripts/processor-authority-production-canary.mjs")) throw new Error("Processor authority production canary missing");
+          const buckets = Object.fromEntries((review.r2_buckets || []).map((item) => [item.binding, item.bucket_name]));
+          if (buckets.WORK_REQUESTS !== "tmg-work-requests-prod" || buckets.DERIVATIVES !== "tmg-work-derivatives-prod" || buckets.PUBLISHED_MEDIA !== "tmg-published-media-prod" || Object.keys(buckets).length !== 3) throw new Error("Review R2 binding topology mismatch");
+          const workflows = Object.fromEntries((review.workflows || []).map((item) => [item.binding, item]));
+          if (workflows.WORK_REQUEST_PROCESSOR?.name !== "tmg-work-request-processing-prod" || workflows.WORK_REQUEST_PROCESSOR?.class_name !== "WorkRequestProcessingWorkflow") throw new Error("Work request workflow binding mismatch");
+          if (workflows.PROCESSOR_CHAIN?.name !== "tmg-processor-chain-v1-1-prod" || workflows.PROCESSOR_CHAIN?.class_name !== "ProcessorChainWorkflow" || Object.keys(workflows).length !== 2) throw new Error("Processor Chain v1.1 binding mismatch");
+          if (review.containers?.length !== 1 || review.containers[0]?.class_name !== "MediaExecutionContainer" || review.containers[0]?.image !== "./containers/media-executor/Dockerfile" || review.containers[0]?.max_instances !== 2 || review.containers[0]?.instance_type !== "standard-1") throw new Error("Media executor container configuration mismatch");
+          if (review.durable_objects?.bindings?.length !== 1 || review.durable_objects.bindings[0]?.name !== "MEDIA_EXECUTOR" || review.durable_objects.bindings[0]?.class_name !== "MediaExecutionContainer") throw new Error("Media executor Durable Object binding mismatch");
+          if (review.vars?.TMG_PUBLICATION_EXECUTION_ENABLED !== "false") throw new Error("Publication execution must remain globally disabled");
+          if (review.vars?.TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED !== "false") throw new Error("External-provider egress must remain globally disabled");
+          if (review.vars?.TMG_PROVIDER_ENDPOINT_ALLOWLIST !== "") throw new Error("Provider endpoint allowlist must remain empty");
+          for (const required of ["src/processor-chain-core.ts","src/processor-chain-workflow.ts","src/media-execution-container.ts","src/governed-output-gates.ts","containers/media-executor/Dockerfile","containers/media-executor/server.mjs","scripts/processor-chain-v1-1-production-canary.mjs"]) {
+            if (!fs.existsSync(required)) throw new Error(`Required Processor Chain v1.1 asset missing: ${required}`);
+          }
           if (backend.env?.production?.routes || backend.env?.production?.route || backend.env?.production?.custom_domains) throw new Error("Canonical backend must remain unrouted");
           for (const flag of ["TMG_PUBLIC_API_ENABLED", "TMG_MCP_ENABLED", "TMG_INGEST_WORKFLOW_ENABLED", "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED"]) {
             if (backend.env?.production?.vars?.[flag] !== "false") throw new Error(`${flag} must remain false`);
           }
           NODE
 
-      - name: Compile protected review Worker
+      - name: Compile protected review Worker, Workflows, and container binding
         run: pnpm exec wrangler deploy --config wrangler.review.jsonc --dry-run --outdir .review-dry-run
 
-      - name: Deploy review Worker and durable workflow
-        run: pnpm exec wrangler deploy --config wrangler.review.jsonc
+      - name: Deploy review Worker, Workflows, and FFmpeg container
+        run: pnpm exec wrangler deploy --config wrangler.review.jsonc --containers-rollout=immediate
 
-      - name: Verify review Worker and workflow registration
+      - name: Verify Worker, Workflows, and container registration
         shell: bash
         run: |
           set -euo pipefail
@@ -85,6 +119,9 @@ jobs:
           test -s review-worker-registration.json
           pnpm exec wrangler workflows list --config wrangler.review.jsonc > workflow-list.txt
           grep -Fq "tmg-work-request-processing-prod" workflow-list.txt
+          grep -Fq "tmg-processor-chain-v1-1-prod" workflow-list.txt
+          pnpm exec wrangler containers list > container-list.txt
+          test -s container-list.txt
 
       - name: Enforce Cloudflare Access account-member gate
         shell: bash
@@ -100,11 +137,14 @@ jobs:
           if (result.policy?.decision !== "allow" || result.policy?.selector !== "cloudflare_account_member") throw new Error("Review Access policy selector mismatch");
           NODE
 
-      - name: Prove durable workflow writes customer live-view context
+      - name: Prove original durable workflow and provider-egress denial
         run: node scripts/work-review-production-canary.mjs
 
       - name: Prove processor-specific authority continuation
         run: node scripts/processor-authority-production-canary.mjs
+
+      - name: Prove Processor Chain v1.1 FFmpeg execution and private derivatives
+        run: node scripts/processor-chain-v1-1-production-canary.mjs
 
       - name: Verify public denial and existing production isolation
         shell: bash
