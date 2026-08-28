@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "request_id": "tmg-kong-mcp-upstream-canary-2026-08-27-001",
+  "request_id": "tmg-kong-mcp-upstream-canary-2026-08-27-002",
   "mode": "deploy",
   "confirmation": "DEPLOY TMG KONG MCP CANARY",
   "authority": "reviewed-gitops-request",
-  "source_parent_sha": "cdaeffd2ffa10789f18e0a9d020b5c02e44e92cf",
+  "source_parent_sha": "223191ac4990b954b793ec44de097cc55a819352",
   "worker_name": "tmg-video-kong-mcp-canary",
   "environment": "development",
   "mutation_authority": true,
@@ -18,13 +18,14 @@
     "external_provider_egress_enabled": false,
     "tool_execution_enabled": false,
     "data_bindings_present": false,
-    "production_authority": false
+    "production_authority": false,
+    "mcp_protocol_version": "2026-07-28"
   },
   "acceptance": [
     "health must read back the exact merged Git SHA",
     "health must prove MCP enabled and public API disabled",
     "health must prove tool execution disabled and no data bindings present",
-    "MCP initialize must succeed",
+    "MCP initialize must negotiate protocol version 2026-07-28",
     "tools/list must expose exactly search_video_moments",
     "tools/call must be rejected by the upstream canary",
     "artifact must contain Worker URL, deployment SHA, health evidence, MCP discovery evidence, and rollback-required=true"
