@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tmg-work-review",
+  "main": "src/work-review-entry.ts",
+  "compatibility_date": "2026-08-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "r2_buckets": [
+    {
+      "binding": "WORK_REQUESTS",
+      "bucket_name": "tmg-work-requests-prod"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "tmg-work-request-processing-prod",
+      "binding": "WORK_REQUEST_PROCESSOR",
+      "class_name": "WorkRequestProcessingWorkflow"
+    }
+  ],
+  "vars": {
+    "TMG_REVIEW_ALLOWED_EMAIL_DOMAINS": ""
+  },
+  "routes": [
+    {
+      "pattern": "review.tolanimediagroup.com",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

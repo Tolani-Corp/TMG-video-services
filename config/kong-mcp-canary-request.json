@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "request_id": "tmg-kong-mcp-upstream-canary-rollback-2026-08-27-004",
+  "mode": "rollback",
+  "confirmation": "ROLLBACK TMG KONG MCP CANARY",
+  "authority": "reviewed-gitops-request",
+  "source_parent_sha": "67a6c9f1d4c2a9ce6741eb7ee778c79c4a4643a7",
+  "worker_name": "tmg-video-kong-mcp-canary",
+  "environment": "development",
+  "mutation_authority": true,
+  "authorized_mutations": [
+    "delete only the Cloudflare Worker named tmg-video-kong-mcp-canary"
+  ],
+  "required_runtime": {
+    "workers_dev": true,
+    "public_api_enabled": false,
+    "mcp_enabled": true,
+    "external_provider_egress_enabled": false,
+    "tool_execution_enabled": false,
+    "data_bindings_present": false,
+    "production_authority": false,
+    "mcp_protocol_version": "2026-07-28",
+    "mcp_protocol_era": "modern-stateless"
+  },
+  "acceptance": [
+    "the rollback executes only in the protected development environment",
+    "the target Worker name is exactly tmg-video-kong-mcp-canary",
+    "Wrangler delete completes successfully",
+    "a rollback receipt records the reviewed merged SHA and deleted=true",
+    "no production Worker, route, DNS, data binding, media, rights, billing, publication, or tool authority is changed"
+  ],
+  "explicitly_not_authorized": [
+    "deployment or replacement of any Worker",
+    "production Worker mutation",
+    "production route or DNS mutation",
+    "R2, Vectorize, Workflow, Durable Object, database, or media binding mutation",
+    "external provider egress",
+    "tool execution",
+    "publication authority",
+    "rights expansion",
+    "billing or monetization activation"
+  ],
+  "rollback_required": true
+}
