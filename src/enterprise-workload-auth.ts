@@ -8,6 +8,12 @@ export class EnterpriseWorkloadAuthError extends Error {
   }
 }
 
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function base64UrlBytes(segment: string): Uint8Array {
   const normalized = segment.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
@@ -30,12 +36,12 @@ function jsonObject(segment: string, code: string): Record<string, unknown> {
   }
 }
 
-function pemDer(pem: string): Uint8Array {
+function pemDer(pem: string): ArrayBuffer {
   if (!pem.includes("BEGIN PUBLIC KEY")) throw new EnterpriseWorkloadAuthError("verification_key_invalid", 500);
   const body = pem.replace(/-----BEGIN PUBLIC KEY-----/g, "").replace(/-----END PUBLIC KEY-----/g, "").replace(/\s+/g, "");
   try {
     const binary = atob(body);
-    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return bytesToArrayBuffer(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
   } catch {
     throw new EnterpriseWorkloadAuthError("verification_key_invalid", 500);
   }
@@ -91,7 +97,9 @@ export async function verifyEnterpriseWorkloadRequest(
 
   const parts = bearer.split(".");
   if (parts.length !== 3 || parts.some((part) => !part)) throw new EnterpriseWorkloadAuthError("jwt_invalid");
-  const [encodedHeader, encodedPayload, encodedSignature] = parts;
+  const encodedHeader = parts[0]!;
+  const encodedPayload = parts[1]!;
+  const encodedSignature = parts[2]!;
   const header = jsonObject(encodedHeader, "jwt_header_invalid");
   const payload = jsonObject(encodedPayload, "jwt_payload_invalid");
   if (header.alg !== "RS256") throw new EnterpriseWorkloadAuthError("jwt_algorithm_forbidden");
@@ -107,7 +115,7 @@ export async function verifyEnterpriseWorkloadRequest(
   const valid = await crypto.subtle.verify(
     "RSASSA-PKCS1-v1_5",
     key,
-    base64UrlBytes(encodedSignature),
+    bytesToArrayBuffer(base64UrlBytes(encodedSignature)),
     encoder.encode(`${encodedHeader}.${encodedPayload}`),
   );
   if (!valid) throw new EnterpriseWorkloadAuthError("jwt_signature_invalid");
