@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "tolani.enterprise-service.v1",
+  "serviceId": "tmg-video",
+  "registryAuthority": "Tolani-Corp/TolaniLabs:platform/enterprise-access/service-registry.json",
+  "domain": "media-intelligence",
+  "interfaces": [
+    {
+      "kind": "api",
+      "internal": { "access": "open-controlled", "scope": "tmg.video.api.invoke", "billing": "exempt" },
+      "external": { "access": "paid-only", "billingAuthority": "stripe" }
+    },
+    {
+      "kind": "mcp",
+      "internal": { "access": "open-controlled", "scope": "tmg.video.mcp.invoke", "billing": "exempt" },
+      "external": { "access": "paid-only", "billingAuthority": "stripe" }
+    }
+  ],
+  "externalConsumerGroups": [
+    "tolani-external-starter",
+    "tolani-external-pro",
+    "tolani-external-enterprise"
+  ],
+  "gatewayBypassProtection": {
+    "required": true,
+    "mode": "cloudflare-access-or-equivalent",
+    "state": "PENDING_VERIFICATION"
+  },
+  "targetDataAuthority": {
+    "structured": "postgresql-18",
+    "objects": "cloudflare-r2",
+    "sharedVectors": "cloudflare-vectorize"
+  },
+  "productionAuthority": false,
+  "notes": "Existing Kong MCP canary remains discovery-only and non-production. External commercial routes stay blocked until origin bypass protection and paid entitlement synchronization are verified."
+}
