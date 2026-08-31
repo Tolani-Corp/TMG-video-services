@@ -9,7 +9,7 @@
     "directory": "./ui",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/v1/*", "/mcp*"]
+    "run_worker_first": ["/health", "/v1/*", "/mcp*", "/internal/*"]
   },
   "exports": {
     "TenantUsageLedger": {
@@ -30,7 +30,9 @@
     "TMG_TENANT_USAGE_LEDGER_ENABLED": "false",
     "TMG_INTAKE_ENABLED": "false",
     "TMG_CONTROL_DB_BINDING_STATE": "unprovisioned",
-    "TMG_CONSOLE_HOST": "console.tolanimediagroup.com"
+    "TMG_CONSOLE_HOST": "console.tolanimediagroup.com",
+    "TOLANI_RUNTIME_ENV": "development",
+    "TOLANI_INTERNAL_ACCESS_ENABLED": "false"
   },
   "d1_databases": [
     {
@@ -93,7 +95,9 @@
         "TMG_TENANT_USAGE_LEDGER_ENABLED": "false",
         "TMG_INTAKE_ENABLED": "false",
         "TMG_CONTROL_DB_BINDING_STATE": "unprovisioned",
-        "TMG_CONSOLE_HOST": "console.tolanimediagroup.com"
+        "TMG_CONSOLE_HOST": "console.tolanimediagroup.com",
+        "TOLANI_RUNTIME_ENV": "production",
+        "TOLANI_INTERNAL_ACCESS_ENABLED": "false"
       },
       "d1_databases": [
         {
