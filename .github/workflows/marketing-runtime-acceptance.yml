@@ -1,0 +1,321 @@
+name: TMG Marketing Runtime Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_generation:
+        description: "Enter RUN to execute the paid draft video-generation canary"
+        required: true
+        default: "NO"
+  push:
+    branches:
+      - feature/checklist-production-intake-v1
+    paths:
+      - .github/workflows/marketing-runtime-acceptance.yml
+      - src/campaign-context.ts
+      - src/firecrawl-marketing-runtime.ts
+      - src/marketing-context.ts
+      - src/marketing-creative.ts
+      - src/marketing-execution-planner.ts
+      - src/marketing-video-runtime.ts
+      - src/production-api.ts
+      - src/production-request-coordinator.ts
+      - src/production-request.ts
+      - src/production-workflow.ts
+      - src/index.ts
+      - src/ui-bootstrap.ts
+      - scripts/render-marketing-runtime-acceptance-config.mjs
+      - scripts/run-marketing-runtime-acceptance.mjs
+      - scripts/verify-marketing-runtime-acceptance.mjs
+      - tests/marketing-execution-planner.test.ts
+      - tests/marketing-runtime.test.ts
+      - tests/production-intake-marketing.test.ts
+      - wrangler.jsonc
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-marketing-runtime-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    if: ${{ github.event_name == 'push' || inputs.confirm_paid_generation == 'RUN' }}
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_AI_GATEWAY_KEY: ${{ secrets.CLOUDFLARE_AI_GATEWAY_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY || secrets.FIRECRAWL_KEY }}
+      ACCEPTANCE_SHA: ${{ github.sha }}
+      TMG_MARKETING_ACCEPT_WORKER: tmg-marketing-accept-${{ github.run_id }}
+      TMG_MARKETING_ACCEPT_R2_BUCKET: tmg-marketing-accept-${{ github.run_id }}
+      TMG_MARKETING_ACCEPT_WORKFLOW: tmg-marketing-workflow-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACCEPTANCE_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Mark marketing acceptance pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"pending\",\"context\":\"TMG Marketing Runtime / acceptance\",\"description\":\"Authorized site-to-review-package canary is running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Verify isolated-canary credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN in development environment"; exit 2; }
+          test -n "${CLOUDFLARE_AI_GATEWAY_KEY:-}" || { echo "::error::Missing CLOUDFLARE_AI_GATEWAY_KEY in development environment"; exit 2; }
+          test -n "${FIRECRAWL_API_KEY:-}" || { echo "::error::Missing FIRECRAWL_API_KEY/FIRECRAWL_KEY in development environment"; exit 2; }
+
+          verify_json="$(curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+            -H "Authorization: Bearer ${CLOUDFLARE_AI_GATEWAY_KEY}")"
+          VERIFY_JSON="${verify_json}" node - <<'NODE'
+          const payload = JSON.parse(process.env.VERIFY_JSON || "null");
+          if (payload?.success !== true || payload?.result?.status !== "active") {
+            console.error("::error::CLOUDFLARE_AI_GATEWAY_KEY is not an active Cloudflare API token");
+            process.exit(3);
+          }
+          console.log("Cloudflare AI Gateway development token is active");
+          NODE
+
+      - name: Verify Unified Billing credit balance
+        shell: bash
+        run: |
+          set -euo pipefail
+          credit_json="$(curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai-gateway/billing/credit-balance" \
+            -H "Authorization: Bearer ${CLOUDFLARE_AI_GATEWAY_KEY}")"
+          CREDIT_JSON="${credit_json}" node - <<'NODE'
+          const payload = JSON.parse(process.env.CREDIT_JSON || "null");
+          const balance = Number(payload?.result?.balance);
+          if (payload?.success !== true || !Number.isFinite(balance)) {
+            console.error("::error::Unable to read AI Gateway Unified Billing credit balance");
+            process.exit(4);
+          }
+          console.log(`AI Gateway Unified Billing balance: ${balance}`);
+          if (balance <= 0) {
+            console.error("::error::AI Gateway Unified Billing balance is empty; P-Video cannot execute");
+            process.exit(5);
+          }
+          NODE
+
+      - name: Install and validate exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+          node scripts/render-marketing-runtime-acceptance-config.mjs
+
+      - name: Provision isolated marketing R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket create "${TMG_MARKETING_ACCEPT_R2_BUCKET}"
+          touch .marketing-r2-created
+
+      - name: Deploy isolated acceptance Worker and Workflow
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --config .wrangler.marketing.acceptance.json 2>&1 | tee marketing-deploy.log
+          touch .marketing-worker-deployed
+          WORKER_URL="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' marketing-deploy.log | tail -1)"
+          test -n "${WORKER_URL}" || { echo "::error::Could not resolve acceptance Worker URL from Wrangler output"; exit 3; }
+          echo "worker_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Bind Firecrawl secret to isolated Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${FIRECRAWL_API_KEY}" | pnpm exec wrangler secret put FIRECRAWL_API_KEY --config .wrangler.marketing.acceptance.json
+
+      - name: Prove synthetic fixture surface is reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in $(seq 1 30); do
+            status="$(curl --silent --show-error --output marketing-fixture.html --write-out '%{http_code}' \
+              "${{ steps.deploy.outputs.worker_url }}/__acceptance/marketing-fixture" || true)"
+            if [ "${status}" = "200" ] && grep -q "TMG Launchpad" marketing-fixture.html; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "${ready}" = true || {
+            echo "::error::Synthetic marketing fixture did not become ready after deployment"
+            cat marketing-fixture.html || true
+            exit 4
+          }
+
+      - name: Execute authorized website to review-package canary
+        shell: bash
+        env:
+          TMG_MARKETING_ACCEPT_BASE_URL: ${{ steps.deploy.outputs.worker_url }}
+        run: node scripts/run-marketing-runtime-acceptance.mjs
+
+      - name: Retrieve pre-render diagnostics after failed execution
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -f marketing-acceptance-request.json ]; then exit 0; fi
+          REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).requestId || ""')"
+          if [ -z "${REQUEST_ID}" ]; then exit 0; fi
+          ROOT="tenants/marketing_acceptance/production-requests/${REQUEST_ID}"
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/campaign-context-v1.json" --file marketing-campaign-context.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/creative-brief-v1.json" --file marketing-creative-brief.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/social-copy-v1.json" --file marketing-social-copy.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/outputs/production-package-v1.json" --file marketing-production-package.json --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+
+      - name: Retrieve immutable marketing artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).requestId')"
+          ROOT="tenants/marketing_acceptance/production-requests/${REQUEST_ID}"
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/outputs/marketing/review-package-v1.json" --file marketing-review-package.json --remote --config .wrangler.marketing.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/campaign-context-v1.json" --file marketing-campaign-context.json --remote --config .wrangler.marketing.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${ROOT}/marketing/creative-brief-v1.json" --file marketing-creative-brief.json --remote --config .wrangler.marketing.acceptance.json
+          mapfile -t VIDEO_KEYS < <(node -e 'const x=JSON.parse(require("fs").readFileSync("marketing-review-package.json","utf8")); for (const v of x.videos ?? []) console.log(v.objectKey)')
+          test "${#VIDEO_KEYS[@]}" -eq 3 || { echo "::error::Expected exactly three generated videos"; exit 4; }
+          i=1
+          for key in "${VIDEO_KEYS[@]}"; do
+            pnpm exec wrangler r2 object get "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${key}" --file "/tmp/tmg-marketing-video-${i}.mp4" --remote --config .wrangler.marketing.acceptance.json
+            i=$((i + 1))
+          done
+
+      - name: Verify campaign context, target variants, and MP4 evidence
+        shell: bash
+        run: node scripts/verify-marketing-runtime-acceptance.mjs
+
+      - name: Capture Workflow evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -f marketing-acceptance-request.json ]; then exit 0; fi
+          WORKFLOW_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).workflowInstanceId || ""')"
+          if [ -z "${WORKFLOW_ID}" ]; then exit 0; fi
+          pnpm exec wrangler workflows instances describe "${TMG_MARKETING_ACCEPT_WORKFLOW}" "${WORKFLOW_ID}" --config .wrangler.marketing.acceptance.json > marketing-workflow.txt 2>&1 || true
+
+      - name: Upload sanitized acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-marketing-runtime-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            marketing-acceptance-request.json
+            marketing-runtime-acceptance-evidence.json
+            marketing-review-package.json
+            marketing-campaign-context.json
+            marketing-creative-brief.json
+            marketing-social-copy.json
+            marketing-production-package.json
+            marketing-workflow.txt
+
+      - name: Remove isolated Worker
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f .marketing-worker-deployed ]; then
+            pnpm exec wrangler delete --name "${TMG_MARKETING_ACCEPT_WORKER}" --config .wrangler.marketing.acceptance.json
+          fi
+
+      - name: Remove isolated R2 objects and bucket
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -f .marketing-r2-created ]; then exit 0; fi
+          if [ -f marketing-acceptance-request.json ]; then
+            REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("marketing-acceptance-request.json","utf8")).requestId')"
+            ROOT="tenants/marketing_acceptance/production-requests/${REQUEST_ID}"
+            KEYS=(
+              "${ROOT}/control/production-plan-v1.json"
+              "${ROOT}/control/marketing-discovery-plan-v1.json"
+              "${ROOT}/outputs/production-package-v1.json"
+              "${ROOT}/marketing/campaign-context-v1.json"
+              "${ROOT}/marketing/creative-brief-v1.json"
+              "${ROOT}/marketing/social-copy-v1.json"
+              "${ROOT}/outputs/marketing/review-package-v1.json"
+            )
+            if [ -f marketing-review-package.json ]; then
+              while IFS= read -r key; do KEYS+=("${key}"); done < <(node -e 'const x=JSON.parse(require("fs").readFileSync("marketing-review-package.json","utf8")); for (const v of x.videos ?? []) console.log(v.objectKey)')
+            fi
+            if [ -f marketing-campaign-context.json ]; then
+              i=1
+              while IFS= read -r job; do
+                KEYS+=("${ROOT}/marketing/discovery/source-${i}-${job}.json")
+                i=$((i + 1))
+              done < <(node -e 'const x=JSON.parse(require("fs").readFileSync("marketing-campaign-context.json","utf8")); for (const s of x.sources ?? []) console.log(s.crawlJobId)')
+            fi
+            for key in "${KEYS[@]}"; do
+              pnpm exec wrangler r2 object delete "${TMG_MARKETING_ACCEPT_R2_BUCKET}/${key}" --remote --config .wrangler.marketing.acceptance.json >/dev/null 2>&1 || true
+            done
+          fi
+          pnpm exec wrangler r2 bucket delete "${TMG_MARKETING_ACCEPT_R2_BUCKET}" >/dev/null 2>&1 || true
+
+      - name: Mark marketing acceptance success
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"TMG Marketing Runtime / acceptance\",\"description\":\"Firecrawl-to-three-video review package canary passed\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark marketing acceptance failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"TMG Marketing Runtime / acceptance\",\"description\":\"Live marketing runtime canary failed; inspect Actions evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
