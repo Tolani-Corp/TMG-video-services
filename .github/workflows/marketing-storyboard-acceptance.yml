@@ -1,0 +1,340 @@
+name: TMG Workers AI Storyboard Acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/checklist-production-intake-v1
+    paths:
+      - .github/workflows/marketing-storyboard-acceptance.yml
+      - src/marketing-storyboard.ts
+      - src/marketing-storyboard-workflow.ts
+      - src/campaign-context.ts
+      - src/firecrawl-marketing-runtime.ts
+      - src/marketing-context.ts
+      - src/marketing-creative.ts
+      - src/production-api.ts
+      - src/production-request-coordinator.ts
+      - src/production-request.ts
+      - src/production-workflow.ts
+      - src/index.ts
+      - scripts/render-marketing-storyboard-acceptance-config.mjs
+      - scripts/run-marketing-storyboard-context.mjs
+      - scripts/verify-marketing-storyboard-acceptance.mjs
+      - scripts/render-marketing-storyboard-motion-preview.mjs
+      - tests/marketing-storyboard.test.ts
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-workers-ai-storyboard-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY || secrets.FIRECRAWL_KEY }}
+      ACCEPTANCE_SHA: ${{ github.sha }}
+      TMG_MARKETING_STORYBOARD_CONTEXT_WORKER: tmg-storyboard-context-${{ github.run_id }}
+      TMG_MARKETING_STORYBOARD_RENDER_WORKER: tmg-storyboard-render-${{ github.run_id }}
+      TMG_MARKETING_STORYBOARD_R2_BUCKET: tmg-storyboard-accept-${{ github.run_id }}
+      TMG_MARKETING_STORYBOARD_CONTEXT_WORKFLOW: tmg-storyboard-context-${{ github.run_id }}
+      TMG_MARKETING_STORYBOARD_RENDER_WORKFLOW: tmg-storyboard-render-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACCEPTANCE_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Mark storyboard acceptance pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"pending\",\"context\":\"TMG Workers AI Storyboard / acceptance\",\"description\":\"Free-neuron storyboard canary is running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Verify isolated-canary secrets are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN in development environment"; exit 2; }
+          test -n "${FIRECRAWL_API_KEY:-}" || { echo "::error::Missing FIRECRAWL_API_KEY/FIRECRAWL_KEY in development environment"; exit 2; }
+          echo "Required isolated-canary secrets are present; Wrangler will validate Cloudflare scope before provisioning."
+
+      - name: Install and validate exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          pnpm marketing:check
+          node scripts/render-marketing-storyboard-acceptance-config.mjs
+          command -v ffmpeg >/dev/null || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
+          command -v ffprobe >/dev/null || { echo "::error::ffprobe unavailable after ffmpeg setup"; exit 4; }
+
+      - name: Provision isolated storyboard R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket create "${TMG_MARKETING_STORYBOARD_R2_BUCKET}"
+          touch .storyboard-r2-created
+
+      - name: Deploy isolated context Worker and Workflow
+        id: context_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --config .wrangler.marketing.storyboard.context.json 2>&1 | tee storyboard-context-deploy.log
+          touch .storyboard-context-worker-deployed
+          WORKER_URL="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' storyboard-context-deploy.log | tail -1)"
+          test -n "${WORKER_URL}" || { echo "::error::Could not resolve storyboard context Worker URL"; exit 4; }
+          echo "worker_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Bind Firecrawl secret to context Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${FIRECRAWL_API_KEY}" | pnpm exec wrangler secret put FIRECRAWL_API_KEY --config .wrangler.marketing.storyboard.context.json
+
+      - name: Deploy isolated Workers AI storyboard renderer
+        id: renderer_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --config .wrangler.marketing.storyboard.renderer.json 2>&1 | tee storyboard-renderer-deploy.log
+          touch .storyboard-render-worker-deployed
+          WORKER_URL="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' storyboard-renderer-deploy.log | tail -1)"
+          test -n "${WORKER_URL}" || { echo "::error::Could not resolve storyboard renderer Worker URL"; exit 4; }
+          echo "worker_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Prove fixture and renderer surfaces are reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          context_ready=false
+          renderer_ready=false
+          for attempt in $(seq 1 30); do
+            context_status="$(curl --silent --show-error --output storyboard-fixture.html --write-out '%{http_code}' \
+              "${{ steps.context_deploy.outputs.worker_url }}/__acceptance/marketing-fixture" || true)"
+            renderer_status="$(curl --silent --show-error --output storyboard-renderer.json --write-out '%{http_code}' \
+              "${{ steps.renderer_deploy.outputs.worker_url }}/" || true)"
+            if [ "${context_status}" = "200" ] && grep -q "TMG Launchpad" storyboard-fixture.html; then context_ready=true; fi
+            if [ "${renderer_status}" = "200" ] && grep -q "free_neuron_preview" storyboard-renderer.json; then renderer_ready=true; fi
+            if [ "${context_ready}" = true ] && [ "${renderer_ready}" = true ]; then break; fi
+            sleep 2
+          done
+          test "${context_ready}" = true || { echo "::error::Storyboard context fixture did not become ready"; exit 5; }
+          test "${renderer_ready}" = true || { echo "::error::Storyboard renderer did not become ready"; exit 5; }
+
+      - name: Execute authorized site to creative-context canary
+        shell: bash
+        env:
+          TMG_MARKETING_STORYBOARD_BASE_URL: ${{ steps.context_deploy.outputs.worker_url }}
+        run: node scripts/run-marketing-storyboard-context.mjs
+
+      - name: Retrieve immutable campaign context and creative brief
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-context-request.json","utf8")).requestId')"
+          ROOT="tenants/storyboard_acceptance/production-requests/${REQUEST_ID}"
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_STORYBOARD_R2_BUCKET}/${ROOT}/marketing/campaign-context-v1.json" --file storyboard-campaign-context.json --remote --config .wrangler.marketing.storyboard.context.json
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_STORYBOARD_R2_BUCKET}/${ROOT}/marketing/creative-brief-v1.json" --file storyboard-creative-brief.json --remote --config .wrangler.marketing.storyboard.context.json
+          pnpm exec wrangler r2 object get "${TMG_MARKETING_STORYBOARD_R2_BUCKET}/${ROOT}/marketing/social-copy-v1.json" --file storyboard-social-copy.json --remote --config .wrangler.marketing.storyboard.context.json
+
+      - name: Trigger free-neuron Workers AI storyboard Workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          STORYBOARD_INSTANCE_ID="$(node -e 'console.log(crypto.randomUUID())')"
+          PARAMS="$(node - <<'NODE'
+          const fs = require('fs');
+          const request = JSON.parse(fs.readFileSync('storyboard-context-request.json', 'utf8'));
+          process.stdout.write(JSON.stringify({
+            schemaVersion: 'tmg.marketing-storyboard-request.v1',
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            creativeBriefKey: request.creativeBriefKey,
+            requestedAt: new Date().toISOString(),
+          }));
+          NODE
+          )"
+          pnpm exec wrangler workflows trigger "${TMG_MARKETING_STORYBOARD_RENDER_WORKFLOW}" "${PARAMS}" \
+            --id "${STORYBOARD_INSTANCE_ID}" \
+            --config .wrangler.marketing.storyboard.renderer.json
+          printf '%s\n' "${STORYBOARD_INSTANCE_ID}" > storyboard-render-workflow-id.txt
+
+      - name: Retrieve and verify Workers AI storyboard frames
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-context-request.json","utf8")).requestId')"
+          ROOT="tenants/storyboard_acceptance/production-requests/${REQUEST_ID}"
+          REVIEW_KEY="${ROOT}/outputs/marketing/storyboard-review-package-v1.json"
+          ready=false
+          for attempt in $(seq 1 120); do
+            if pnpm exec wrangler r2 object get "${TMG_MARKETING_STORYBOARD_R2_BUCKET}/${REVIEW_KEY}" \
+              --file storyboard-review-package.json --remote --config .wrangler.marketing.storyboard.renderer.json >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 3
+          done
+          test "${ready}" = true || { echo "::error::Storyboard review package was not produced"; exit 6; }
+          mapfile -t FRAME_KEYS < <(node -e 'const x=JSON.parse(require("fs").readFileSync("storyboard-review-package.json","utf8")); for (const f of x.frames ?? []) console.log(f.objectKey)')
+          test "${#FRAME_KEYS[@]}" -eq 3 || { echo "::error::Expected exactly three Workers AI storyboard frames"; exit 6; }
+          i=1
+          for key in "${FRAME_KEYS[@]}"; do
+            pnpm exec wrangler r2 object get "${TMG_MARKETING_STORYBOARD_R2_BUCKET}/${key}" \
+              --file "storyboard-frame-${i}.bin" --remote --config .wrangler.marketing.storyboard.renderer.json
+            i=$((i + 1))
+          done
+          node scripts/verify-marketing-storyboard-acceptance.mjs
+
+      - name: Compile and verify deterministic MP4 review mockups
+        shell: bash
+        run: node scripts/render-marketing-storyboard-motion-preview.mjs
+
+      - name: Capture Workflow evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f storyboard-context-request.json ]; then
+            CONTEXT_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-context-request.json","utf8")).workflowInstanceId || ""')"
+            if [ -n "${CONTEXT_ID}" ]; then
+              pnpm exec wrangler workflows instances describe "${TMG_MARKETING_STORYBOARD_CONTEXT_WORKFLOW}" "${CONTEXT_ID}" \
+                --config .wrangler.marketing.storyboard.context.json > storyboard-context-workflow.txt 2>&1 || true
+            fi
+          fi
+          if [ -f storyboard-render-workflow-id.txt ]; then
+            RENDER_ID="$(cat storyboard-render-workflow-id.txt)"
+            pnpm exec wrangler workflows instances describe "${TMG_MARKETING_STORYBOARD_RENDER_WORKFLOW}" "${RENDER_ID}" \
+              --config .wrangler.marketing.storyboard.renderer.json > storyboard-render-workflow.txt 2>&1 || true
+          fi
+
+      - name: Upload sanitized storyboard acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-workers-ai-storyboard-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            storyboard-context-request.json
+            storyboard-campaign-context.json
+            storyboard-creative-brief.json
+            storyboard-social-copy.json
+            storyboard-review-package.json
+            storyboard-runtime-acceptance-evidence.json
+            storyboard-motion-preview-evidence.json
+            storyboard-frame-*.bin
+            storyboard-preview-*.mp4
+            storyboard-context-workflow.txt
+            storyboard-render-workflow.txt
+
+      - name: Remove isolated context Worker
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f .storyboard-context-worker-deployed ]; then
+            pnpm exec wrangler delete --name "${TMG_MARKETING_STORYBOARD_CONTEXT_WORKER}" --config .wrangler.marketing.storyboard.context.json
+          fi
+
+      - name: Remove isolated storyboard renderer Worker
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f .storyboard-render-worker-deployed ]; then
+            pnpm exec wrangler delete --name "${TMG_MARKETING_STORYBOARD_RENDER_WORKER}" --config .wrangler.marketing.storyboard.renderer.json
+          fi
+
+      - name: Remove isolated storyboard R2 objects and bucket
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -f .storyboard-r2-created ]; then exit 0; fi
+          if [ -f storyboard-context-request.json ]; then
+            REQUEST_ID="$(node -p 'JSON.parse(require("fs").readFileSync("storyboard-context-request.json","utf8")).requestId')"
+            ROOT="tenants/storyboard_acceptance/production-requests/${REQUEST_ID}"
+            KEYS=(
+              "${ROOT}/control/production-plan-v1.json"
+              "${ROOT}/control/marketing-discovery-plan-v1.json"
+              "${ROOT}/outputs/production-package-v1.json"
+              "${ROOT}/marketing/campaign-context-v1.json"
+              "${ROOT}/marketing/creative-brief-v1.json"
+              "${ROOT}/marketing/social-copy-v1.json"
+              "${ROOT}/outputs/marketing/review-package-v1.json"
+              "${ROOT}/outputs/marketing/storyboard-review-package-v1.json"
+            )
+            if [ -f storyboard-review-package.json ]; then
+              while IFS= read -r key; do KEYS+=("${key}"); done < <(node -e 'const x=JSON.parse(require("fs").readFileSync("storyboard-review-package.json","utf8")); for (const f of x.frames ?? []) console.log(f.objectKey)')
+            fi
+            if [ -f storyboard-campaign-context.json ]; then
+              i=1
+              while IFS= read -r job; do
+                KEYS+=("${ROOT}/marketing/discovery/source-${i}-${job}.json")
+                i=$((i + 1))
+              done < <(node -e 'const x=JSON.parse(require("fs").readFileSync("storyboard-campaign-context.json","utf8")); for (const s of x.sources ?? []) console.log(s.crawlJobId)')
+            fi
+            for key in "${KEYS[@]}"; do
+              pnpm exec wrangler r2 object delete "${TMG_MARKETING_STORYBOARD_R2_BUCKET}/${key}" --remote --config .wrangler.marketing.storyboard.context.json >/dev/null 2>&1 || true
+            done
+          fi
+          pnpm exec wrangler r2 bucket delete "${TMG_MARKETING_STORYBOARD_R2_BUCKET}" >/dev/null 2>&1 || true
+
+      - name: Mark storyboard acceptance success
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"TMG Workers AI Storyboard / acceptance\",\"description\":\"Free-neuron storyboard + three MP4 review mockups passed\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark storyboard acceptance failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"TMG Workers AI Storyboard / acceptance\",\"description\":\"Free-neuron storyboard canary failed; inspect evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
