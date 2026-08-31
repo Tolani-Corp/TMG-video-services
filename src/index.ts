@@ -1,3 +1,4 @@
+import { EnterpriseWorkloadAuthError, verifyEnterpriseWorkloadRequest } from "./enterprise-workload-auth";
 import { handleMcp } from "./mcp";
 import { handleProductionApi } from "./production-api";
 import { vectorSearchBodySchema } from "./schemas";
@@ -7,6 +8,13 @@ import { searchVideoMoments, VectorDimensionError } from "./vectorize";
 interface MarketingAcceptanceFixtureEnv extends Env {
   TMG_MARKETING_ACCEPTANCE_FIXTURE_ENABLED?: string;
 }
+
+type EnterpriseEnv = Env & {
+  TOLANI_CLERK_JWT_KEY?: string;
+  TOLANI_CLERK_ISSUER?: string;
+  TOLANI_RUNTIME_ENV?: string;
+  TOLANI_INTERNAL_ACCESS_ENABLED?: string;
+};
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
@@ -21,6 +29,31 @@ function json(body: unknown, status = 200): Response {
 
 function isEnabled(value: string | undefined): boolean {
   return value === "true";
+}
+
+async function requireInternalWorkload(request: Request, env: EnterpriseEnv, requiredScope: string) {
+  if (!isEnabled(env.TOLANI_INTERNAL_ACCESS_ENABLED)) {
+    return { response: json({ error: "internal_access_disabled" }, 503) } as const;
+  }
+  if (!env.TOLANI_CLERK_JWT_KEY || !env.TOLANI_CLERK_ISSUER || !env.TOLANI_RUNTIME_ENV) {
+    return { response: json({ error: "internal_identity_not_configured" }, 503) } as const;
+  }
+  try {
+    const principal = await verifyEnterpriseWorkloadRequest(request, {
+      pemPublicKey: env.TOLANI_CLERK_JWT_KEY,
+      expectedIssuer: env.TOLANI_CLERK_ISSUER,
+      expectedAudience: `tolani:tmg-video:${env.TOLANI_RUNTIME_ENV}`,
+      expectedEnvironment: env.TOLANI_RUNTIME_ENV,
+      requiredScopes: [requiredScope],
+      maxTtlSeconds: 300,
+      clockSkewSeconds: 30,
+    });
+    return { principal } as const;
+  } catch (error) {
+    const authError = error instanceof EnterpriseWorkloadAuthError ? error : new EnterpriseWorkloadAuthError("workload_verification_failed", 500);
+    const status = authError.status === 500 ? 503 : authError.status;
+    return { response: json({ error: authError.code }, status) } as const;
+  }
 }
 
 function marketingAcceptanceFixture(pathname: string): Response | null {
@@ -76,10 +109,11 @@ function marketingAcceptanceFixture(pathname: string): Response | null {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, rawEnv: Env, ctx: ExecutionContext): Promise<Response> {
+    const env = rawEnv as EnterpriseEnv;
+    const fixtureEnv = rawEnv as MarketingAcceptanceFixtureEnv;
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
-    const fixtureEnv = env as MarketingAcceptanceFixtureEnv;
 
     if (
       request.method === "GET" &&
@@ -97,6 +131,7 @@ export default {
         publicStatusGate: "G0",
         publicApiEnabled: isEnabled(env.TMG_PUBLIC_API_ENABLED),
         mcpEnabled: isEnabled(env.TMG_MCP_ENABLED),
+        internalAccessEnabled: isEnabled(env.TOLANI_INTERNAL_ACCESS_ENABLED),
         productionRequestApiEnabled: isEnabled(env.TMG_PRODUCTION_REQUEST_API_ENABLED),
         marketingDiscoveryEnabled: isEnabled(env.TMG_MARKETING_DISCOVERY_ENABLED),
         marketingVideoGenerationEnabled: isEnabled(env.TMG_MARKETING_VIDEO_GENERATION_ENABLED),
@@ -105,6 +140,28 @@ export default {
         policyVersion: env.TMG_POLICY_VERSION,
         requestId,
       });
+    }
+
+    if (request.method === "GET" && url.pathname === "/internal/access/probe") {
+      const auth = await requireInternalWorkload(request, env, "tolani.service.discover");
+      if ("response" in auth) return auth.response;
+      return json({
+        service: "tmg-video",
+        accessClass: "tolani-internal",
+        callerServiceId: auth.principal.serviceId,
+        interfaces: ["api", "mcp"],
+        billingExempt: true,
+        requestId,
+      });
+    }
+
+    if (url.pathname === "/internal/mcp") {
+      const auth = await requireInternalWorkload(request, env, "tmg.video.mcp.invoke");
+      if ("response" in auth) return auth.response;
+      if (!isEnabled(env.TMG_MCP_ENABLED)) {
+        return json({ error: "mcp_disabled", requestId }, 503);
+      }
+      return handleMcp(request, env, ctx);
     }
 
     if (request.method === "GET" && url.pathname === "/v1/ui/bootstrap") {
