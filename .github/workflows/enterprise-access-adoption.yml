@@ -1,0 +1,27 @@
+name: Enterprise Access Adoption
+
+on:
+  pull_request:
+    paths:
+      - "config/enterprise-service.json"
+      - "scripts/enterprise-access-policy-check.mjs"
+      - ".github/workflows/enterprise-access-adoption.yml"
+  push:
+    branches: [main]
+    paths:
+      - "config/enterprise-service.json"
+      - "scripts/enterprise-access-policy-check.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/enterprise-access-policy-check.mjs
