@@ -1,0 +1,203 @@
+name: TMG Image Runtime Acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/checklist-production-intake-v1
+    paths:
+      - .github/workflows/image-runtime-acceptance-v2.yml
+      - src/image-runtime.ts
+      - src/image-workflow.ts
+      - src/index.ts
+      - scripts/render-image-runtime-acceptance-config.mjs
+      - scripts/prepare-image-runtime-acceptance.mjs
+      - scripts/verify-image-runtime-acceptance.mjs
+      - tests/image-runtime.test.ts
+      - docs/IMAGE_RUNTIME_V1.md
+      - wrangler.jsonc
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: tmg-image-runtime-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20586cf099d39fcbeb5db4043e20f6f
+      ACCEPTANCE_SHA: ${{ github.sha }}
+      TMG_IMAGE_ACCEPT_WORKER: tmg-image-accept-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_R2_BUCKET: tmg-image-accept-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_WORKFLOW: tmg-image-workflow-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_REQUEST_ID: image-accept-${{ github.run_id }}
+      TMG_IMAGE_ACCEPT_INSTANCE_ID: image-instance-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACCEPTANCE_SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm with Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+
+      - name: Mark image acceptance pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"pending\",\"context\":\"TMG Image Runtime / acceptance\",\"description\":\"R2-to-images review package canary is running\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Validate exact head and prepare deterministic fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 2; }
+          pnpm install --no-frozen-lockfile
+          pnpm cf-typegen
+          pnpm typecheck
+          pnpm test
+          node scripts/render-image-runtime-acceptance-config.mjs
+          node scripts/prepare-image-runtime-acceptance.mjs
+
+      - name: Provision and seed isolated R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler r2 bucket create "${TMG_IMAGE_ACCEPT_R2_BUCKET}"
+          touch .image-r2-created
+          SOURCE_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("image-acceptance-request.json","utf8")).source.objectKey')"
+          LOGO_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("image-acceptance-request.json","utf8")).logo.objectKey')"
+          pnpm exec wrangler r2 object put "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${SOURCE_KEY}" --file image-acceptance-source.png --content-type image/png --remote --config .wrangler.image.acceptance.json
+          pnpm exec wrangler r2 object put "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${LOGO_KEY}" --file image-acceptance-logo.png --content-type image/png --remote --config .wrangler.image.acceptance.json
+
+      - name: Deploy isolated Images Worker and Workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy --config .wrangler.image.acceptance.json
+          touch .image-worker-deployed
+
+      - name: Trigger governed image workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAMS="$(node -p 'JSON.stringify(JSON.parse(require("fs").readFileSync("image-acceptance-request.json","utf8")))')"
+          pnpm exec wrangler workflows trigger "${TMG_IMAGE_ACCEPT_WORKFLOW}" "${PARAMS}" --id "${TMG_IMAGE_ACCEPT_INSTANCE_ID}" --config .wrangler.image.acceptance.json
+
+      - name: Wait for top-level image workflow terminal state
+        shell: bash
+        run: |
+          set -euo pipefail
+          completed=false
+          for attempt in $(seq 1 120); do
+            pnpm exec wrangler workflows instances describe "${TMG_IMAGE_ACCEPT_WORKFLOW}" "${TMG_IMAGE_ACCEPT_INSTANCE_ID}" --config .wrangler.image.acceptance.json > image-workflow.txt 2>&1 || true
+            STATUS="$(sed -n 's/^Status:[[:space:]]*//p' image-workflow.txt | head -1)"
+            case "${STATUS}" in
+              *Complete*|*Completed*|*Success*) completed=true; break ;;
+              *Errored*|*Terminated*|*Failed*) cat image-workflow.txt; exit 5 ;;
+            esac
+            sleep 2
+          done
+          test "${completed}" = true || { cat image-workflow.txt; echo "::error::Image workflow did not complete in bounded window"; exit 6; }
+          cat image-workflow.txt
+
+      - name: Retrieve immutable image manifest and derivatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tenants/image_acceptance/image-runtime/${TMG_IMAGE_ACCEPT_REQUEST_ID}"
+          pnpm exec wrangler r2 object get "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${ROOT}/control/image-asset-manifest-v1.json" --file image-asset-manifest.json --remote --config .wrangler.image.acceptance.json
+          pnpm exec wrangler r2 object get "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${ROOT}/review/image-campaign-review-package-v1.json" --file image-campaign-review-package.json --remote --config .wrangler.image.acceptance.json
+          mapfile -t KEYS < <(node -e 'const x=JSON.parse(require("fs").readFileSync("image-campaign-review-package.json","utf8")); for (const item of x.derivatives) console.log(item.objectKey)')
+          test "${#KEYS[@]}" -eq 4 || { echo "::error::Expected four derivatives"; exit 7; }
+          i=1
+          for key in "${KEYS[@]}"; do
+            pnpm exec wrangler r2 object get "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${key}" --file "image-output-${i}.webp" --remote --config .wrangler.image.acceptance.json
+            i=$((i + 1))
+          done
+
+      - name: Verify SHA, rights, overlays, presets, and WebP evidence
+        shell: bash
+        run: node scripts/verify-image-runtime-acceptance.mjs
+
+      - name: Upload sanitized acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmg-image-runtime-acceptance-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            image-acceptance-request.json
+            image-asset-manifest.json
+            image-campaign-review-package.json
+            image-runtime-acceptance-evidence.json
+            image-workflow.txt
+
+      - name: Teardown isolated Worker
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f .image-worker-deployed ]; then pnpm exec wrangler delete --name "${TMG_IMAGE_ACCEPT_WORKER}" --config .wrangler.image.acceptance.json; fi
+
+      - name: Teardown isolated R2
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -f .image-r2-created ]; then exit 0; fi
+          if [ -f image-acceptance-request.json ]; then
+            SOURCE_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("image-acceptance-request.json","utf8")).source.objectKey')"
+            LOGO_KEY="$(node -p 'JSON.parse(require("fs").readFileSync("image-acceptance-request.json","utf8")).logo.objectKey')"
+            pnpm exec wrangler r2 object delete "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${SOURCE_KEY}" --remote --config .wrangler.image.acceptance.json >/dev/null 2>&1 || true
+            pnpm exec wrangler r2 object delete "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${LOGO_KEY}" --remote --config .wrangler.image.acceptance.json >/dev/null 2>&1 || true
+          fi
+          if [ -f image-campaign-review-package.json ]; then
+            while IFS= read -r key; do pnpm exec wrangler r2 object delete "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${key}" --remote --config .wrangler.image.acceptance.json >/dev/null 2>&1 || true; done < <(node -e 'const x=JSON.parse(require("fs").readFileSync("image-campaign-review-package.json","utf8")); for (const item of x.derivatives) console.log(item.objectKey)')
+          fi
+          ROOT="tenants/image_acceptance/image-runtime/${TMG_IMAGE_ACCEPT_REQUEST_ID}"
+          pnpm exec wrangler r2 object delete "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${ROOT}/control/image-asset-manifest-v1.json" --remote --config .wrangler.image.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 object delete "${TMG_IMAGE_ACCEPT_R2_BUCKET}/${ROOT}/review/image-campaign-review-package-v1.json" --remote --config .wrangler.image.acceptance.json >/dev/null 2>&1 || true
+          pnpm exec wrangler r2 bucket delete "${TMG_IMAGE_ACCEPT_R2_BUCKET}" >/dev/null 2>&1 || true
+
+      - name: Mark image acceptance success
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"TMG Image Runtime / acceptance\",\"description\":\"Four governed branded image derivatives verified\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark image acceptance failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${ACCEPTANCE_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"TMG Image Runtime / acceptance\",\"description\":\"Image runtime canary failed; inspect Actions evidence\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"

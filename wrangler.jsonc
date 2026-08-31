@@ -15,11 +15,21 @@
     "TenantUsageLedger": {
       "type": "durable-object",
       "storage": "sqlite"
+    },
+    "ProductionRequestCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite"
     }
   },
   "vars": {
     "TMG_PUBLIC_API_ENABLED": "false",
     "TMG_MCP_ENABLED": "false",
+    "TMG_PRODUCTION_REQUEST_API_ENABLED": "false",
+    "TMG_MARKETING_DISCOVERY_ENABLED": "false",
+    "TMG_MARKETING_VIDEO_GENERATION_ENABLED": "false",
+    "TMG_MARKETING_VIDEO_PROVIDER_ID": "pruna/p-video",
+    "TMG_MARKETING_VIDEO_PROVIDER_ACCEPTANCE_STATE": "unverified",
+    "TMG_IMAGE_RUNTIME_ENABLED": "false",
     "TMG_INGEST_WORKFLOW_ENABLED": "false",
     "TMG_INGESTION_MODE": "fixture_only",
     "TMG_POLICY_VERSION": "2026-08-20.v3",
@@ -31,11 +41,21 @@
     "TOLANI_RUNTIME_ENV": "development",
     "TOLANI_INTERNAL_ACCESS_ENABLED": "false"
   },
+  "ai": {
+    "binding": "AI"
+  },
+  "images": {
+    "binding": "IMAGES"
+  },
   "durable_objects": {
     "bindings": [
       {
         "name": "TENANT_USAGE_LEDGER",
         "class_name": "TenantUsageLedger"
+      },
+      {
+        "name": "PRODUCTION_REQUESTS",
+        "class_name": "ProductionRequestCoordinator"
       }
     ]
   },
@@ -61,6 +81,16 @@
       "name": "tmg-video-revocation-dev",
       "binding": "REVOKE_WORKFLOW",
       "class_name": "RevocationWorkflow"
+    },
+    {
+      "name": "tmg-video-production-dev",
+      "binding": "PRODUCTION_WORKFLOW",
+      "class_name": "ProductionWorkflow"
+    },
+    {
+      "name": "tmg-image-processing-dev",
+      "binding": "IMAGE_WORKFLOW",
+      "class_name": "ImageProcessingWorkflow"
     }
   ],
   "observability": {
@@ -70,7 +100,14 @@
   "env": {
     "production": {
       "name": "tmg-video-services-production",
+      "compatibility_date": "2026-08-20",
       "workers_dev": false,
+      "exports": {
+        "TenantUsageLedger": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        }
+      },
       "vars": {
         "TMG_PUBLIC_API_ENABLED": "false",
         "TMG_MCP_ENABLED": "false",
