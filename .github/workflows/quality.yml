@@ -26,6 +26,10 @@ jobs:
         run: pnpm install --no-frozen-lockfile
       - name: Generate Cloudflare binding types
         run: pnpm cf-typegen
+      - name: Validate protected review deployment bundle
+        run: |
+          docker version >/dev/null
+          pnpm exec wrangler deploy --config wrangler.review.jsonc --dry-run --outdir .review-dry-run
       - name: Typecheck
         run: pnpm typecheck
       - name: Unit tests

@@ -36,7 +36,13 @@ export type ReviewRecord = {
   at: string;
 };
 
-export type ProcessorId = "rights-provenance" | "media-inspection" | "content-analysis" | "custom";
+export type ProcessorId =
+  | "rights-provenance"
+  | "media-inspection"
+  | "technical-inspection"
+  | "derivative"
+  | "content-analysis"
+  | "custom";
 
 export type ProcessorAuthorityEnvelope = {
   schema: "tmg.processor-authority.v1";
@@ -64,7 +70,12 @@ export type ProcessorRoute = {
   state: string;
   authorizable: boolean;
   localOnly: boolean;
-  adapter: "rights-provenance-v1" | "media-inspection-v1" | null;
+  adapter:
+    | "rights-provenance-v1"
+    | "media-inspection-v1"
+    | "technical-inspection-v1"
+    | "derivative-ffmpeg-v1"
+    | null;
   allowedActions: string[];
   nextAction: string;
 };
@@ -119,10 +130,26 @@ export type WorkflowBinding = {
   get(id: string): Promise<WorkflowInstance>;
 };
 
+export type MediaExecutorStub = {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+};
+
+export type MediaExecutorNamespace = {
+  getByName(name: string): MediaExecutorStub;
+};
+
 export type ReviewEnv = {
   WORK_REQUESTS: R2Bucket;
+  DERIVATIVES: R2Bucket;
+  PUBLISHED_MEDIA: R2Bucket;
   WORK_REQUEST_PROCESSOR: WorkflowBinding;
+  PROCESSOR_CHAIN: WorkflowBinding;
+  MEDIA_EXECUTOR: MediaExecutorNamespace;
   TMG_REVIEW_ALLOWED_EMAIL_DOMAINS?: string;
+  TMG_PUBLICATION_EXECUTION_ENABLED?: string;
+  TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED?: string;
+  TMG_PROVIDER_ENDPOINT_ALLOWLIST?: string;
+  TMG_PROVIDER_AUTHORIZATION?: string;
 };
 
 export type DispatchPayload = { requestId: string; reviewId: string; reviewerEmail: string };

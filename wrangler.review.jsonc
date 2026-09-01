@@ -9,6 +9,14 @@
     {
       "binding": "WORK_REQUESTS",
       "bucket_name": "tmg-work-requests-prod"
+    },
+    {
+      "binding": "DERIVATIVES",
+      "bucket_name": "tmg-work-derivatives-prod"
+    },
+    {
+      "binding": "PUBLISHED_MEDIA",
+      "bucket_name": "tmg-published-media-prod"
     }
   ],
   "workflows": [
@@ -16,10 +24,44 @@
       "name": "tmg-work-request-processing-prod",
       "binding": "WORK_REQUEST_PROCESSOR",
       "class_name": "WorkRequestProcessingWorkflow"
+    },
+    {
+      "name": "tmg-processor-chain-v1-1-prod",
+      "binding": "PROCESSOR_CHAIN",
+      "class_name": "ProcessorChainWorkflow"
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "MediaExecutionContainer",
+      "image": "./containers/media-executor/Dockerfile",
+      "max_instances": 2,
+      "instance_type": "standard-1",
+      "rollout_step_percentage": 100,
+      "constraints": {
+        "regions": ["ENAM"]
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_EXECUTOR",
+        "class_name": "MediaExecutionContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "processor-chain-v1-1",
+      "new_sqlite_classes": ["MediaExecutionContainer"]
     }
   ],
   "vars": {
-    "TMG_REVIEW_ALLOWED_EMAIL_DOMAINS": ""
+    "TMG_REVIEW_ALLOWED_EMAIL_DOMAINS": "",
+    "TMG_PUBLICATION_EXECUTION_ENABLED": "false",
+    "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false",
+    "TMG_PROVIDER_ENDPOINT_ALLOWLIST": ""
   },
   "routes": [
     {

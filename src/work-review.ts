@@ -16,6 +16,12 @@ import {
   type WorkRequestStatus,
 } from "./work-review-core";
 import { buildProcessorAuthorityEnvelope } from "./processor-authority";
+import {
+  authorizeDerivativeRecipe,
+  authorizeTechnicalInspection,
+  recordRightsSufficiencyVerdict,
+  startProcessorChain,
+} from "./processor-chain-review-actions";
 
 type AccessIdentity = { email?: string; name?: string; id?: string };
 type AccessContext = ExecutionContext & {
@@ -484,7 +490,7 @@ const reviewWorker = {
       return evidenceDownload(env, download[1]!, download[2]!);
     }
 
-    const action = url.pathname.match(/^\/api\/requests\/(wr_[^/]+)\/(review|approve|reject|authorize-processor|outcome)$/);
+    const action = url.pathname.match(/^\/api\/requests\/(wr_[^/]+)\/(review|approve|reject|authorize-processor|chain-start|technical-authorize|rights-verdict|derivative-authorize|outcome)$/);
     if (request.method === "POST" && action) {
       const requestId = action[1]!;
       switch (action[2]) {
@@ -492,6 +498,10 @@ const reviewWorker = {
         case "approve": return approveAndDispatch(request, env, requestId, operator);
         case "reject": return rejectRequest(request, env, requestId, operator);
         case "authorize-processor": return authorizeProcessor(request, env, requestId, operator);
+        case "chain-start": return startProcessorChain(env, requestId, operator);
+        case "technical-authorize": return authorizeTechnicalInspection(request, env, requestId, operator);
+        case "rights-verdict": return recordRightsSufficiencyVerdict(request, env, requestId, operator);
+        case "derivative-authorize": return authorizeDerivativeRecipe(request, env, requestId, operator);
         case "outcome": return recordOutcome(request, env, requestId, operator);
       }
     }
@@ -502,6 +512,9 @@ const reviewWorker = {
         status: "ok",
         operator: { email: operator.email },
         accessAudience: operator.audience,
+        processorChain: "v1.1",
+        publicationExecutionEnabled: env.TMG_PUBLICATION_EXECUTION_ENABLED === "true",
+        externalProviderEgressEnabled: env.TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED === "true",
       });
     }
     return json({ error: "not_found" }, 404);
