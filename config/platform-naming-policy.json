@@ -75,6 +75,65 @@
       "TOLANI_INTERNAL_ACCESS_ENABLED"
     ]
   },
+  "wranglerProfiles": {
+    "wrangler.review.jsonc": {
+      "purpose": "protected-human-review-runtime",
+      "expectedName": "tmg-work-review",
+      "workersDev": false,
+      "requiredVars": {
+        "TMG_PUBLICATION_EXECUTION_ENABLED": "false",
+        "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED": "false"
+      },
+      "requiredBindingNames": ["WORK_REQUESTS", "DERIVATIVES", "PUBLISHED_MEDIA", "WORK_REQUEST_PROCESSOR", "PROCESSOR_CHAIN", "MEDIA_EXECUTOR"],
+      "allowedResourceEnvironmentSuffixes": ["prod"]
+    },
+    "wrangler.site.jsonc": {
+      "purpose": "public-site-and-governed-work-request-intake",
+      "expectedName": "tolani-media-group-site",
+      "workersDev": false,
+      "requiredVars": {
+        "TMG_WORK_REQUEST_INTAKE_ENABLED": "true"
+      },
+      "requiredBindingNames": ["ASSETS", "TMG_BACKEND", "WORK_REQUESTS", "WORK_REQUEST_START_LIMITER", "WORK_REQUEST_UPLOAD_LIMITER"],
+      "requiredWorkerFirstRoutes": ["/status.json", "/work-requests", "/work-requests/*"],
+      "allowedServiceTargets": ["tmg-video-services-production"],
+      "allowedResourceEnvironmentSuffixes": ["prod"]
+    },
+    "config/wrangler.production-runtime-acceptance.jsonc": {
+      "purpose": "production-runtime-fixture-acceptance",
+      "expectedName": "tmg-video-runtime-acceptance",
+      "workersDev": false,
+      "previewUrls": false,
+      "requiredVars": {
+        "TMG_ACCEPTANCE_PROVIDER_ID": "fixture",
+        "TMG_ACCEPTANCE_MODE": "fixture_only"
+      },
+      "requiredBindingNames": ["ACCEPTANCE_LEDGER"],
+      "allowedServiceTargets": ["tmg-video-services-production"]
+    },
+    "config/wrangler.production-s1-canary-ingress.jsonc": {
+      "purpose": "production-s1-operator-canary-ingress",
+      "expectedName": "tmg-video-s1-canary-ingress",
+      "workersDev": false,
+      "previewUrls": false,
+      "requiredVars": {
+        "TMG_CANARY_MODE": "s1_operator_smoke_only"
+      },
+      "requiredBindingNames": ["TARGET_SERVICE"],
+      "allowedServiceTargets": ["tmg-video-services-production"]
+    },
+    "config/wrangler.production-tenant-auth-acceptance.jsonc": {
+      "purpose": "production-tenant-auth-fixture-acceptance",
+      "expectedName": "tmg-video-tenant-auth-acceptance",
+      "workersDev": false,
+      "previewUrls": false,
+      "requiredVars": {
+        "TMG_AUTH_MODE": "production_acceptance_only"
+      },
+      "requiredBindingNames": ["ACCEPTANCE_LEDGER"],
+      "allowedServiceTargets": ["tmg-video-services-production"]
+    }
+  },
   "routes": {
     "health": "/health",
     "versionedApiPrefix": "/v1/",
