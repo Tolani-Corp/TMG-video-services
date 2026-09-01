@@ -24,6 +24,8 @@ jobs:
           corepack prepare pnpm@10 --activate
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+      - name: Validate Tolani platform naming contract
+        run: pnpm platform-naming-policy:check
       - name: Generate Cloudflare binding types
         run: pnpm cf-typegen
       - name: Validate protected review deployment bundle
