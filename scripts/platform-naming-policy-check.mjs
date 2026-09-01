@@ -37,6 +37,7 @@ const resourcePattern = new RegExp(policy.resourceNaming?.cloudflareResourcePatt
 const codeFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.(?:test|spec))?\.(?:ts|js|mjs|cjs|sh)$/;
 const workflowFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.ya?ml$/;
 const configFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.schema)?\.(?:json|jsonc|sha256)$/;
+const wranglerProfilePattern = /^wrangler\.[a-z0-9]+(?:-[a-z0-9]+)*\.jsonc$/;
 const envNamePattern = /^[A-Z][A-Z0-9_]*$/;
 
 if (pkg.name !== policy.service?.packageName) failures.push(`package.json name must be ${policy.service?.packageName}`);
@@ -59,7 +60,9 @@ for (const file of listFiles(".github/workflows")) {
 }
 for (const file of listFiles("config")) {
   const base = path.basename(file);
-  if (!configFilePattern.test(base)) failures.push(`${file}: config filename must be kebab-case with json/jsonc/schema/sha256 suffix`);
+  if (!configFilePattern.test(base) && !wranglerProfilePattern.test(base)) {
+    failures.push(`${file}: config filename must be kebab-case or wrangler.<kebab-profile>.jsonc`);
+  }
 }
 
 const rootVars = wrangler.vars ?? {};
