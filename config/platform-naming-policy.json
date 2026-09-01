@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "tolani.tmg-video.platform-naming-policy.v1",
+  "service": {
+    "serviceId": "tmg-video",
+    "repository": "Tolani-Corp/TMG-video-services",
+    "packageName": "@tolani-corp/tmg-video-services",
+    "workerName": "tmg-video-services",
+    "canonicalPortfolioAuthority": "Tolani-Corp/TolaniCorp-HQ",
+    "enterpriseRegistryAuthority": "Tolani-Corp/TolaniLabs:platform/enterprise-access/service-registry.json"
+  },
+  "namespaces": {
+    "serviceSchemaPrefix": "tmg.",
+    "platformSchemaPrefix": "tolani.",
+    "serviceEnvironmentPrefix": "TMG_",
+    "platformEnvironmentPrefix": "TOLANI_"
+  },
+  "files": {
+    "codeStyle": "kebab-case",
+    "workflowStyle": "kebab-case",
+    "configStyle": "kebab-case",
+    "allowedConfigSuffixes": [
+      "-acceptance.json",
+      "-authority.json",
+      "-binding.json",
+      "-context.json",
+      "-entitlements.json",
+      "-fingerprint.json",
+      "-identities.json",
+      "-policy.json",
+      "-registry.json",
+      "-request.json",
+      ".schema.json"
+    ]
+  },
+  "runtime": {
+    "canonicalEnvironments": ["development", "preview", "review", "staging", "production"],
+    "booleanFlagSuffix": "_ENABLED",
+    "booleanFlagValues": ["true", "false"],
+    "acceptanceStateSuffix": "_ACCEPTANCE_STATE",
+    "providerIdSuffix": "_PROVIDER_ID",
+    "policyVersionSuffix": "_POLICY_VERSION",
+    "modeSuffix": "_MODE",
+    "requiredProductionVars": [
+      "TMG_PUBLIC_API_ENABLED",
+      "TMG_MCP_ENABLED",
+      "TMG_PRODUCTION_REQUEST_API_ENABLED",
+      "TMG_MARKETING_DISCOVERY_ENABLED",
+      "TMG_MARKETING_VIDEO_GENERATION_ENABLED",
+      "TMG_MARKETING_VIDEO_PROVIDER_ID",
+      "TMG_MARKETING_VIDEO_PROVIDER_ACCEPTANCE_STATE",
+      "TMG_IMAGE_RUNTIME_ENABLED",
+      "TMG_INGEST_WORKFLOW_ENABLED",
+      "TMG_INGESTION_MODE",
+      "TMG_POLICY_VERSION",
+      "TMG_EMBEDDING_DIMENSIONS",
+      "TMG_EMBEDDING_PROVIDER_ID",
+      "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED",
+      "TMG_PROVIDER_ACCEPTANCE_STATE",
+      "TMG_TENANT_USAGE_LEDGER_ENABLED",
+      "TOLANI_RUNTIME_ENV",
+      "TOLANI_INTERNAL_ACCESS_ENABLED"
+    ],
+    "productionMustRemainFalse": [
+      "TMG_PUBLIC_API_ENABLED",
+      "TMG_MCP_ENABLED",
+      "TMG_PRODUCTION_REQUEST_API_ENABLED",
+      "TMG_MARKETING_DISCOVERY_ENABLED",
+      "TMG_MARKETING_VIDEO_GENERATION_ENABLED",
+      "TMG_IMAGE_RUNTIME_ENABLED",
+      "TMG_INGEST_WORKFLOW_ENABLED",
+      "TMG_EXTERNAL_PROVIDER_EGRESS_ENABLED",
+      "TMG_TENANT_USAGE_LEDGER_ENABLED",
+      "TOLANI_INTERNAL_ACCESS_ENABLED"
+    ]
+  },
+  "routes": {
+    "health": "/health",
+    "versionedApiPrefix": "/v1/",
+    "internalPrefix": "/internal/",
+    "mcpPrefix": "/mcp"
+  },
+  "authorityTerminology": {
+    "capabilityOrEnvelopeSuffix": "Authority",
+    "evaluatedDecisionSuffix": "Authorized",
+    "rules": [
+      "Authority names a capability plane, grant, or envelope and does not imply that a request was approved.",
+      "Authorized names an evaluated request-local decision and must not be used as a substitute for durable authority evidence.",
+      "Publication, processing, commercial, licensing, and external-provider-egress authority remain independent planes."
+    ]
+  },
+  "schemaCompatibility": {
+    "newSchemaPattern": "^(?:tmg|tolani)\\.[a-z0-9]+(?:[.-][a-z0-9]+)*\\.v[0-9]+(?:\\.[0-9]+)?$",
+    "legacyPlainSemverReadCompatible": true,
+    "legacyRule": "Existing plain-semver schemas are compatibility contracts. Do not rename them in place; introduce a namespaced successor schema and an explicit migration when replacement is required."
+  },
+  "resourceNaming": {
+    "bindingPattern": "^[A-Z][A-Z0-9_]*$",
+    "cloudflareResourcePattern": "^tmg-[a-z0-9-]+-(?:dev|preview|review|staging|prod|production)$",
+    "renameExistingLiveResourcesInPlace": false
+  },
+  "defaultDeny": true
+}
