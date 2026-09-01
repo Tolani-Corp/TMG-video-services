@@ -1,6 +1,7 @@
 {
   "schemaVersion": "1.0.0",
-  "bindingId": "tolani.tmg_video_services.ecosystem_policy.v1",
+  "bindingId": "tolani.tmg-video.ecosystem-policy.v1",
+  "legacyBindingIds": ["tolani.tmg_video_services.ecosystem_policy.v1"],
   "canonicalPortfolioAuthority": "Tolani-Corp/TolaniCorp-HQ",
   "sources": [
     {

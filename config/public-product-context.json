@@ -1,6 +1,7 @@
 {
   "schemaVersion": "1.0.0",
-  "entityId": "tolani.tmg_video_services",
+  "entityId": "tolani.tmg-video",
+  "legacyEntityIds": ["tolani.tmg_video_services"],
   "canonicalRepo": "Tolani-Corp/TMG-video-services",
   "canonicalDomain": null,
   "classification": "shared_commercial_infrastructure_prototype",
