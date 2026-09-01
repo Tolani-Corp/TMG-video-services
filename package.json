@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "fixture:verify": "node scripts/verify-fixture.mjs",
+    "platform-naming-policy:check": "node scripts/platform-naming-policy-check.mjs",
     "provider-acceptance:check": "node scripts/provider-acceptance-check.mjs",
     "temporal-segment-policy:check": "node scripts/temporal-segment-policy-check.mjs",
     "derived-rights-cascade-policy:check": "node scripts/derived-rights-cascade-policy-check.mjs",
@@ -28,7 +29,7 @@
     "ui:check": "node scripts/ui-integrity-check.mjs",
     "production:dry-run": "wrangler deploy --env production --dry-run --outdir .production-dry-run",
     "marketing:check": "node scripts/marketing-check.mjs && node scripts/provider-acceptance-check.mjs && node scripts/temporal-segment-policy-check.mjs && node scripts/derived-rights-cascade-policy-check.mjs && node scripts/provider-promotion-policy-check.mjs && node scripts/production-release-policy-check.mjs && node scripts/production-bootstrap-policy-check.mjs && node scripts/production-reconciliation-policy-check.mjs && node scripts/production-fingerprint-policy-check.mjs && pnpm production-runtime-acceptance-policy:check && pnpm production-runtime-acceptance-evidence:check && pnpm production-tenant-auth-acceptance-policy:check && pnpm production-tenant-auth-acceptance-evidence:check && pnpm production-release-authority-policy:check && pnpm ui:check",
-    "check": "pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
+    "check": "pnpm platform-naming-policy:check && pnpm cf-typegen && pnpm typecheck && pnpm test && pnpm fixture:verify && pnpm marketing:check"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7",
