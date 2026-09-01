@@ -18,6 +18,7 @@
     "codeStyle": "kebab-case",
     "workflowStyle": "kebab-case",
     "configStyle": "kebab-case",
+    "allowedExtensions": [".json", ".jsonc", ".sha256"],
     "allowedConfigSuffixes": [
       "-acceptance.json",
       "-authority.json",
@@ -29,7 +30,8 @@
       "-policy.json",
       "-registry.json",
       "-request.json",
-      ".schema.json"
+      ".schema.json",
+      ".jsonc"
     ]
   },
   "runtime": {
