@@ -36,36 +36,18 @@ const bindingPattern = new RegExp(policy.resourceNaming?.bindingPattern ?? "^$")
 const resourcePattern = new RegExp(policy.resourceNaming?.cloudflareResourcePattern ?? "^$");
 const codeFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.(?:test|spec))?\.(?:ts|js|mjs|cjs|sh)$/;
 const workflowFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.ya?ml$/;
-const configFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.schema)?\.(?:json|sha256)$/;
+const configFilePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.schema)?\.(?:json|jsonc|sha256)$/;
 const envNamePattern = /^[A-Z][A-Z0-9_]*$/;
 
-if (pkg.name !== policy.service?.packageName) {
-  failures.push(`package.json name must be ${policy.service?.packageName}`);
-}
-if (enterprise.serviceId !== policy.service?.serviceId) {
-  failures.push(`enterprise serviceId must be ${policy.service?.serviceId}`);
-}
-if (enterprise.registryAuthority !== policy.service?.enterpriseRegistryAuthority) {
-  failures.push("enterprise registryAuthority drifted from the platform naming policy");
-}
-if (wrangler.name !== policy.service?.workerName) {
-  failures.push(`default Worker name must be ${policy.service?.workerName}`);
-}
-if (publicContext.canonicalRepo !== policy.service?.repository) {
-  failures.push("public-product-context canonicalRepo drifted from platform policy");
-}
-if (ecosystem.canonicalPortfolioAuthority !== policy.service?.canonicalPortfolioAuthority) {
-  failures.push("ecosystem policy binding canonical authority drifted from platform policy");
-}
-if (publicContext.entityId !== "tolani.tmg-video") {
-  failures.push("public-product-context entityId must use canonical service id tolani.tmg-video");
-}
-if (ecosystem.bindingId !== "tolani.tmg-video.ecosystem-policy.v1") {
-  failures.push("ecosystem policy bindingId must use canonical dotted/kebab service namespace");
-}
-if (enterprise.productionAuthority !== false) {
-  failures.push("enterprise-service productionAuthority must remain false in this naming-only increment");
-}
+if (pkg.name !== policy.service?.packageName) failures.push(`package.json name must be ${policy.service?.packageName}`);
+if (enterprise.serviceId !== policy.service?.serviceId) failures.push(`enterprise serviceId must be ${policy.service?.serviceId}`);
+if (enterprise.registryAuthority !== policy.service?.enterpriseRegistryAuthority) failures.push("enterprise registryAuthority drifted from the platform naming policy");
+if (wrangler.name !== policy.service?.workerName) failures.push(`default Worker name must be ${policy.service?.workerName}`);
+if (publicContext.canonicalRepo !== policy.service?.repository) failures.push("public-product-context canonicalRepo drifted from platform policy");
+if (ecosystem.canonicalPortfolioAuthority !== policy.service?.canonicalPortfolioAuthority) failures.push("ecosystem policy binding canonical authority drifted from platform policy");
+if (publicContext.entityId !== "tolani.tmg-video") failures.push("public-product-context entityId must use canonical service id tolani.tmg-video");
+if (ecosystem.bindingId !== "tolani.tmg-video.ecosystem-policy.v1") failures.push("ecosystem policy bindingId must use canonical dotted/kebab service namespace");
+if (enterprise.productionAuthority !== false) failures.push("enterprise-service productionAuthority must remain false in this naming-only increment");
 
 for (const file of listFiles("src").concat(listFiles("scripts"), listFiles("tests"))) {
   const base = path.basename(file);
@@ -77,7 +59,7 @@ for (const file of listFiles(".github/workflows")) {
 }
 for (const file of listFiles("config")) {
   const base = path.basename(file);
-  if (!configFilePattern.test(base)) failures.push(`${file}: config filename must be kebab-case with json/schema/sha256 suffix`);
+  if (!configFilePattern.test(base)) failures.push(`${file}: config filename must be kebab-case with json/jsonc/schema/sha256 suffix`);
 }
 
 const rootVars = wrangler.vars ?? {};
@@ -86,9 +68,7 @@ for (const [scope, vars] of [["default", rootVars], ["production", productionVar
   for (const [name, value] of Object.entries(vars)) {
     if (!envNamePattern.test(name)) failures.push(`${scope} env var ${name} must be SCREAMING_SNAKE_CASE`);
     if (name.startsWith("TMG_") && name.endsWith(policy.runtime?.booleanFlagSuffix ?? "_ENABLED")) {
-      if (!(policy.runtime?.booleanFlagValues ?? ["true", "false"]).includes(String(value))) {
-        failures.push(`${scope} feature flag ${name} must be explicit string true/false`);
-      }
+      if (!(policy.runtime?.booleanFlagValues ?? ["true", "false"]).includes(String(value))) failures.push(`${scope} feature flag ${name} must be explicit string true/false`);
     }
   }
 }
