@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema": "tolani.repository-ci-execution-profile.v1",
+  "repository": "Tolani-Corp/TMG-video-services",
+  "status": "configured-preview-only",
+  "productionEnabled": false,
+  "nodeVersion": "22",
+  "install": {
+    "command": "corepack enable && corepack prepare pnpm@10.15.0 --activate && pnpm install --no-frozen-lockfile"
+  },
+  "checks": [
+    {
+      "id": "quality",
+      "command": "pnpm check",
+      "classification": "VALIDATION"
+    },
+    {
+      "id": "reviewDryRun",
+      "command": "pnpm exec wrangler deploy --config wrangler.review.jsonc --dry-run --outdir .review-dry-run",
+      "classification": "VALIDATION"
+    }
+  ],
+  "cloudflareWorkersBuilds": {
+    "role": "primary-alternate-ci-execution",
+    "workerName": "tolani-ci-tmg-video",
+    "connectionState": "REQUIRES_ACCOUNT_SIDE_VERIFICATION",
+    "buildCommand": "node scripts/run-tolani-alternate-ci.mjs",
+    "deployCommand": "npx --yes wrangler@4.129.1 versions upload --config infra/cloudflare/enterprise-ci/wrangler.jsonc",
+    "nonProductionBranchesRequired": true,
+    "exactSourceShaRequired": true,
+    "productionActivationAuthorized": false
+  },
+  "githubActions": {
+    "role": "independent-ci-corroboration",
+    "workflow": ".github/workflows/tolani-ci-corroboration.yml",
+    "mergeAuthority": false
+  },
+  "z4": {
+    "role": "evidence-evaluation-plane",
+    "evaluatorAuthorityRepository": "Tolani-Corp/TolaniCorp-HQ",
+    "evaluationContract": "tolani.z4.enterprise-outcome-evaluation.v1",
+    "decisionIdRequired": true,
+    "outcomeReceiptIdRequired": true,
+    "policyMutationAuthorized": false,
+    "promotionAuthority": false
+  },
+  "workflowPolicy": {
+    "validationWorkflows": "ALTERNATE_EXECUTION_ELIGIBLE",
+    "consequentialWorkflows": "EVIDENCE_CONSUMER_ONLY",
+    "excludedConsequentialPatterns": [
+      "deploy",
+      "production",
+      "promotion",
+      "migration",
+      "dns",
+      "payment",
+      "secret",
+      "release",
+      "one-shot",
+      "traffic"
+    ]
+  },
+  "receipt": {
+    "schema": "tolani.ci-execution-receipt.v1",
+    "productionAuthority": false,
+    "mergeAuthority": false,
+    "humanDecisionRequired": true,
+    "githubActionsCorroborationRequired": true,
+    "z4EvaluationRequired": true
+  }
+}
