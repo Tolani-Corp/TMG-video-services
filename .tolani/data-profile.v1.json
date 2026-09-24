@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "tolani.repository-data-profile.v1",
+  "repository": "Tolani-Corp/TMG-video-services",
+  "repositoryId": "tmg-video",
+  "tenantId": "tolani-corp",
+  "domain": "media-intelligence",
+  "owner": "Tolani Labs",
+  "lifecycleStatus": "draft",
+  "productionEligible": false,
+  "classificationReviewRequired": true,
+  "statelessControlPlane": false,
+  "environments": [
+    "development",
+    "preview",
+    "staging",
+    "production"
+  ],
+  "dataDomains": [
+    {
+      "id": "tmg-video.operational",
+      "classification": "CONFIDENTIAL",
+      "accessMode": "service-api-only",
+      "schemaContractRef": "tmg-video.schema.operational.v1",
+      "retentionPolicyRef": "tolani.retention.pending-owner-approval.v1"
+    }
+  ],
+  "datastores": [
+    {
+      "id": "tmg-video-target",
+      "engine": "r2-plus-postgresql",
+      "provider": "cloudflare-plus-neon-initial",
+      "role": "authoritative",
+      "connectionAuthority": "repo-runtime-only",
+      "environments": [
+        "development",
+        "preview",
+        "staging",
+        "production"
+      ],
+      "authoritativeFor": [
+        "tmg-video.operational"
+      ]
+    }
+  ],
+  "crossRepositoryAccess": {
+    "directDatabaseAllowed": false,
+    "apiFabricRequired": true
+  },
+  "migrationState": "retain-cloudflare-native-media-plane",
+  "evidenceRefs": [
+    "enterprise-access:service-registry:tmg-video"
+  ]
+}
