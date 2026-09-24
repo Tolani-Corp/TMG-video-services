@@ -1,0 +1,36 @@
+name: Tolani CI Independent Corroboration
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tolani-ci-corroboration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  corroborate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TOLANI_CI_CORROBORATION: "1"
+      TOLANI_CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TOLANI_CI_BRANCH: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run exact-SHA independent corroboration
+        run: node scripts/run-tolani-alternate-ci.mjs
+      - name: Upload CI execution receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tolani-ci-receipt-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/tolani-ci/ci-execution-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
