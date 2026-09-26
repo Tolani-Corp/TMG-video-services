@@ -7,7 +7,7 @@ const readJson = (path) => {
   catch (error) { fail(`${path}: ${error instanceof Error ? error.message : "invalid JSON"}`); return {}; }
 };
 const read = (path) => {
-  try { return fs.readFileSync(path, "utf8"); }
+  try { return fs.readFileSync(path, "utf8").replace(/\r\n/g, "\n"); }
   catch (error) { fail(`${path}: ${error instanceof Error ? error.message : "read failure"}`); return ""; }
 };
 
